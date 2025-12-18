@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Show Tracker</title>
+    <link rel="stylesheet" href="../popup.css" />
+  </head>
+  <body>
+    <div class="popup-root">
+      <header class="app-header">
+        <div class="header-left">
+          <div class="app-avatar"></div>
+          <div class="title-block">
+            <h1 class="title">Show Tracker</h1>
+            <p class="subtitle">Next‑episode countdown for your favorite series.</p>
+          </div>
+        </div>
+        <button id="add-show-btn" class="button primary-button">+ Add show</button>
+      </header>
+
+      <main class="popup-main">
+        <section id="search-section" class="search-panel">
+          <div class="search-shell">
+            <span class="search-icon" aria-hidden="true">🔍</span>
+            <input
+              id="search-input"
+              type="text"
+              placeholder="Search TV show…"
+              class="search-input"
+            />
+            <button id="search-btn" class="search-icon-button" aria-label="Search"></button>
+          </div>
+          <div id="search-results" class="search-results"></div>
+        </section>
+
+        <section aria-label="Tracked shows" class="shows-section">
+          <div id="shows-container" class="shows-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="../popup.js" type="module"></script>
+  </body>
+</html>
+
+
