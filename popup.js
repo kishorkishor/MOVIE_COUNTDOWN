@@ -21,14 +21,34 @@ const SAMPLE_SHOWS = [
   }
 ];
 
+let currentSortMode = "soonest";
+
 document.addEventListener("DOMContentLoaded", () => {
   const searchInput = document.getElementById("search-input");
   const searchBtn = document.getElementById("search-btn");
   const searchResultsEl = document.getElementById("search-results");
   const showsContainer = document.getElementById("shows-container");
+  const sortSelect = document.getElementById("sort-select");
 
   if (!showsContainer) return;
-  loadAndRenderShows(showsContainer);
+
+  if (sortSelect) {
+    chrome.storage.sync.get("sortMode", (res) => {
+      if (res.sortMode) {
+        currentSortMode = res.sortMode;
+        sortSelect.value = currentSortMode;
+      }
+      loadAndRenderShows(showsContainer);
+    });
+
+    sortSelect.addEventListener("change", async (e) => {
+      currentSortMode = e.target.value;
+      await chrome.storage.sync.set({ sortMode: currentSortMode });
+      loadAndRenderShows(showsContainer);
+    });
+  } else {
+    loadAndRenderShows(showsContainer);
+  }
 
   if (searchBtn && searchInput && searchResultsEl) {
     const debouncedSearch = debounce(() => {
@@ -74,7 +94,9 @@ function renderShows(container, shows, options = { interactive: true }) {
     return;
   }
 
-  for (const show of shows) {
+  const ordered = sortShows(shows, currentSortMode);
+
+  for (const show of ordered) {
     const card = createShowCard(show, options.interactive);
     container.appendChild(card);
   }
@@ -156,6 +178,21 @@ function createShowCard(show, interactive) {
   card.appendChild(content);
 
   return card;
+}
+
+function sortShows(shows, mode) {
+  const copy = [...shows];
+  if (mode === "alpha") {
+    copy.sort((a, b) => a.name.localeCompare(b.name));
+  } else {
+    // default: soonest next episode first
+    copy.sort((a, b) => {
+      const ta = a.nextEpisode?.airstamp ? Date.parse(a.nextEpisode.airstamp) : Infinity;
+      const tb = b.nextEpisode?.airstamp ? Date.parse(b.nextEpisode.airstamp) : Infinity;
+      return ta - tb;
+    });
+  }
+  return copy;
 }
 
 function getCountdownInfo(airstamp) {
