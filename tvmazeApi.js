@@ -26,10 +26,20 @@ export async function searchShows(query) {
         genres: Array.isArray(show.genres) ? show.genres : [],
         premiered: show.premiered || null,
         status: show.status || null,
+        summary: show.summary ? show.summary.replace(/<[^>]+>/g, "") : "",
         image:
           (show.image && (show.image.medium || show.image.original)) || null
       };
     });
+}
+
+export async function fetchShow(showId) {
+  const res = await fetch(`${TVMAZE_BASE_URL}/shows/${showId}`);
+  if (!res.ok) {
+    console.error("TVmaze show details failed", res.status);
+    return null;
+  }
+  return res.json();
 }
 
 export async function fetchEpisodes(showId) {

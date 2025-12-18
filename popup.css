@@ -325,7 +325,7 @@ body {
   gap: 10px;
   min-height: 128px;
   padding: 12px 14px;
-  border-radius: 18px;
+  border-radius: 24px;
   background: linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(15, 23, 42, 0.92));
   box-shadow: 0 16px 32px rgba(0, 0, 0, 0.9);
   border: 1px solid rgba(148, 163, 184, 0.25);
@@ -385,7 +385,7 @@ body {
 .show-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 
 .show-title {
@@ -398,6 +398,29 @@ body {
   font-size: 12px;
   font-weight: 500;
   opacity: 0.8;
+}
+
+.show-details {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.9);
+  font-size: 11px;
+  color: rgba(209, 213, 219, 0.9);
+  line-height: 1.5;
+}
+
+.show-details-line {
+  margin-bottom: 4px;
+}
+
+.show-details-line:last-child {
+  margin-bottom: 0;
+}
+
+.show-details-label {
+  font-weight: 600;
+  margin-right: 4px;
 }
 
 .show-remove {

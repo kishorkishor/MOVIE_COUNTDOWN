@@ -1,5 +1,6 @@
 import {
   searchShows,
+  fetchShow,
   fetchEpisodes,
   computeNextEpisode,
   isFetchStale
@@ -11,6 +12,9 @@ const SAMPLE_SHOWS = [
     name: "Strange Things in the Mountains",
     image:
       "https://static.tvmaze.com/uploads/images/medium_landscape/1/4388.jpg",
+    genres: ["Drama", "Mystery"],
+    status: "Running",
+    summary: "A sample show to demonstrate the card and details layout.",
     nextEpisode: {
       season: 2,
       number: 5,
@@ -138,9 +142,10 @@ function createShowCard(show, interactive) {
 
   const sub = document.createElement("div");
   sub.className = "show-countdown";
-  const primaryGenre =
-    Array.isArray(show.genres) && show.genres.length ? show.genres[0] : "";
-  sub.textContent = primaryGenre || "";
+  const genreList = Array.isArray(show.genres) ? show.genres : [];
+  const subLabel =
+    genreList.length > 0 ? genreList.join(", ") : show.status || "";
+  sub.textContent = subLabel || "";
 
   const textWrap = document.createElement("div");
   textWrap.className = "show-text";
@@ -177,7 +182,121 @@ function createShowCard(show, interactive) {
   content.appendChild(timer);
   card.appendChild(content);
 
+  if (interactive) {
+    attachDetailsToggle(card, show);
+  }
+
   return card;
+}
+
+// Toggle details drawer when clicking the card (ignore remove button clicks)
+function attachDetailsToggle(card, show) {
+  card.addEventListener("click", (e) => {
+    const target = e.target;
+    if (target instanceof HTMLElement && target.closest(".show-remove")) {
+      return;
+    }
+    toggleShowDetails(card, show);
+  });
+}
+
+function toggleShowDetails(card, show) {
+  const existing = card.querySelector(".show-details");
+  if (existing) {
+    existing.remove();
+    return;
+  }
+
+  const details = document.createElement("div");
+  details.className = "show-details";
+  details.textContent = "Loading details…";
+  card.appendChild(details);
+
+  populateShowDetails(details, show);
+}
+
+async function populateShowDetails(detailsEl, show) {
+  try {
+    const [showInfo, episodes] = await Promise.all([
+      fetchShow(show.id),
+      fetchEpisodes(show.id)
+    ]);
+
+    detailsEl.innerHTML = "";
+
+    const summaryLine = document.createElement("div");
+    summaryLine.className = "show-details-line";
+    const rawSummary =
+      (showInfo && typeof showInfo.summary === "string"
+        ? showInfo.summary
+        : show.summary) || "";
+    const cleanSummary = rawSummary.replace(/<[^>]+>/g, "").trim();
+    summaryLine.textContent =
+      cleanSummary.length > 0 ? cleanSummary : "No summary available.";
+
+    const genresLine = document.createElement("div");
+    genresLine.className = "show-details-line";
+    const genresSource =
+      showInfo && Array.isArray(showInfo.genres) && showInfo.genres.length
+        ? showInfo.genres
+        : Array.isArray(show.genres)
+        ? show.genres
+        : [];
+    const genresText =
+      genresSource && genresSource.length ? genresSource.join(", ") : "Unknown genre";
+    genresLine.innerHTML =
+      '<span class="show-details-label">Genres</span>' + genresText;
+
+    const statusLine = document.createElement("div");
+    statusLine.className = "show-details-line";
+    statusLine.innerHTML =
+      '<span class="show-details-label">Status</span>' +
+      (showInfo?.status || show.status || "Unknown");
+
+    const episodesLine = document.createElement("div");
+    episodesLine.className = "show-details-line";
+    if (episodes.length) {
+      const seasonsSet = new Set();
+      episodes.forEach((ep) => {
+        if (typeof ep.season === "number") {
+          seasonsSet.add(ep.season);
+        }
+      });
+      episodesLine.innerHTML =
+        '<span class="show-details-label">Episodes</span>' +
+        `${episodes.length} in ${seasonsSet.size} season${
+          seasonsSet.size === 1 ? "" : "s"
+        }`;
+    } else {
+      episodesLine.innerHTML =
+        '<span class="show-details-label">Episodes</span>Unknown';
+    }
+
+    const nextLine = document.createElement("div");
+    nextLine.className = "show-details-line";
+    if (show.nextEpisode?.airstamp) {
+      const dt = new Date(show.nextEpisode.airstamp);
+      const when = dt.toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short"
+      });
+      nextLine.innerHTML =
+        '<span class="show-details-label">Next</span>' +
+        `S${show.nextEpisode.season}E${show.nextEpisode.number} \u2022 ${when}`;
+    } else {
+      nextLine.innerHTML =
+        '<span class="show-details-label">Next</span>No upcoming episode';
+    }
+
+    detailsEl.appendChild(summaryLine);
+    detailsEl.appendChild(genresLine);
+    detailsEl.appendChild(statusLine);
+    detailsEl.appendChild(episodesLine);
+    detailsEl.appendChild(nextLine);
+  } catch (err) {
+    console.error("Failed to load show details", err);
+    detailsEl.textContent = "Unable to load details.";
+  }
 }
 
 function sortShows(shows, mode) {
@@ -381,18 +500,43 @@ async function addShowFromSearch(showSummary) {
 
   let nextEpisode = null;
   let fetchedAt = null;
+  let showInfo = null;
   try {
-    const episodes = await fetchEpisodes(showSummary.id);
+    const [info, episodes] = await Promise.all([
+      fetchShow(showSummary.id),
+      fetchEpisodes(showSummary.id)
+    ]);
+    showInfo = info;
     nextEpisode = computeNextEpisode(episodes);
     fetchedAt = new Date().toISOString();
   } catch (err) {
     console.error("Failed to fetch episodes for new show", err);
   }
 
+  const genres = Array.isArray(showInfo?.genres) && showInfo.genres.length
+    ? showInfo.genres
+    : Array.isArray(showSummary.genres)
+    ? showSummary.genres
+    : [];
+
+  const status = showInfo?.status || showSummary.status || null;
+
+  const summary =
+    typeof showInfo?.summary === "string"
+      ? showInfo.summary.replace(/<[^>]+>/g, "")
+      : showSummary.summary || "";
+
+  const imageFromInfo =
+    showInfo?.image && (showInfo.image.medium || showInfo.image.original);
+  const image = imageFromInfo || showSummary.image || null;
+
   const newShow = {
     id: showSummary.id,
     name: showSummary.name,
-    image: showSummary.image || null,
+    image,
+    genres,
+    status,
+    summary,
     nextEpisode,
     allEpisodesLastFetchedAt: fetchedAt,
     watched: false,
