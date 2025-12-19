@@ -38,6 +38,13 @@
         </div>
       </header>
 
+      <!-- Navigation Tabs -->
+      <nav class="nav-tabs">
+        <button class="nav-tab active" data-view="my-shows">My Shows</button>
+        <button class="nav-tab" data-view="airing">Airing</button>
+        <button class="nav-tab" data-view="popular">Popular</button>
+      </nav>
+
       <!-- Login Modal -->
       <div id="login-modal" class="login-modal" style="display: none;">
         <div class="login-modal-content">
@@ -105,6 +112,19 @@
         </section>
 
         <section aria-label="Tracked shows" class="shows-section">
+          <!-- Content Type Toggles (for Popular and Airing views) -->
+          <div id="content-type-toggles" class="content-type-toggles" style="display: none;">
+            <button class="content-type-btn active" data-type="tv">TV Shows</button>
+            <button class="content-type-btn" data-type="anime">Anime</button>
+            <button class="content-type-btn" data-type="movies">Movies</button>
+          </div>
+          
+          <!-- Genre Filters (for Popular view) -->
+          <div id="genre-filters" class="genre-filters" style="display: none;">
+            <div class="genre-filters-label">Filter by genre:</div>
+            <div id="genre-filters-list" class="genre-filters-list"></div>
+          </div>
+          
           <div class="shows-header">
             <span class="section-title">Your shows</span>
             <select id="sort-select" class="sort-select">

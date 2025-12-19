@@ -106,6 +106,158 @@ body {
     0 0 0 1px rgba(191, 219, 254, 0.75);
 }
 
+/* Navigation Tabs */
+.nav-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 0 2px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 0% 0%, #0f172a, #020617);
+  box-shadow:
+    0 10px 20px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(30, 64, 175, 0.6);
+  padding: 4px;
+}
+
+.nav-tab {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: rgba(148, 163, 184, 0.8);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease-out;
+  position: relative;
+}
+
+.nav-tab:hover {
+  color: rgba(191, 219, 254, 0.95);
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.nav-tab.active {
+  color: #ffffff;
+  background: linear-gradient(135deg, #6c8cff, #8c9dff);
+  box-shadow: 0 4px 12px rgba(108, 140, 255, 0.3);
+}
+
+.nav-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(108, 140, 255, 0.5);
+}
+
+/* Content Type Toggles */
+.content-type-toggles {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 0% 0%, #0f172a, #020617);
+  box-shadow:
+    0 10px 20px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(30, 64, 175, 0.6);
+}
+
+.content-type-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: rgba(148, 163, 184, 0.8);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease-out;
+}
+
+.content-type-btn:hover {
+  color: rgba(191, 219, 254, 0.95);
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.content-type-btn.active {
+  color: #ffffff;
+  background: linear-gradient(135deg, #6c8cff, #8c9dff);
+  box-shadow: 0 4px 12px rgba(108, 140, 255, 0.3);
+}
+
+.content-type-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(108, 140, 255, 0.5);
+}
+
+/* Genre Filters */
+.genre-filters {
+  margin-bottom: 12px;
+  padding: 0 2px;
+}
+
+.genre-filters-label {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.7;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+.genre-filters-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.genre-filter-chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: none;
+  background: var(--glass-soft);
+  color: rgba(148, 163, 184, 0.9);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease-out;
+  box-shadow:
+    0 4px 8px rgba(0, 0, 0, 0.7),
+    0 0 0 1px rgba(148, 163, 184, 0.2);
+}
+
+.genre-filter-chip:hover {
+  background: var(--glass);
+  color: rgba(191, 219, 254, 0.95);
+  transform: translateY(-1px);
+}
+
+.genre-filter-chip.active {
+  background: linear-gradient(135deg, #6c8cff, #8c9dff);
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(108, 140, 255, 0.3);
+}
+
+.genre-filter-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(108, 140, 255, 0.5);
+}
+
+/* Content Type Badge */
+.content-type-badge {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+/* Movie Timer */
+.movie-timer {
+  font-size: 11px;
+  opacity: 0.7;
+  font-style: italic;
+}
+
 .button {
   border-radius: 12px;
   padding: 7px 14px;
@@ -340,6 +492,39 @@ body {
   opacity: 0.85;
   font-size: 12px;
   color: rgba(191, 219, 254, 0.95);
+}
+
+.search-result-genres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.search-genre-tag {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  background: rgba(108, 140, 255, 0.15);
+  color: rgba(191, 219, 254, 0.9);
+  border: 1px solid rgba(108, 140, 255, 0.3);
+  cursor: pointer;
+  transition: all 0.15s ease-out;
+  user-select: none;
+}
+
+.search-genre-tag:hover {
+  background: rgba(108, 140, 255, 0.25);
+  border-color: rgba(108, 140, 255, 0.5);
+  color: rgba(191, 219, 254, 1);
+  transform: translateY(-1px);
+}
+
+.search-genre-tag:active {
+  transform: translateY(0);
+  background: rgba(108, 140, 255, 0.35);
 }
 
 .shows-list {

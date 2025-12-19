@@ -18,7 +18,9 @@
     "alarms"
   ],
   "host_permissions": [
-    "https://api.tvmaze.com/*"
+    "https://api.tvmaze.com/*",
+    "https://api.jikan.moe/*",
+    "https://query.wikidata.org/*"
   ],
   "background": {
     "service_worker": "background.js",

@@ -1,10 +1,30 @@
 import {
   searchShows,
+  searchShowsByGenre,
+  searchShowsByGenreWithPopularity,
   fetchShow,
   fetchEpisodes,
   computeNextEpisode,
-  isFetchStale
+  isFetchStale,
+  fetchScheduleToday,
+  fetchPopularShows,
+  lookupByImdb,
+  searchByTitle
 } from "./tvmazeApi.js";
+import {
+  fetchAiringAnime,
+  fetchPopularAnime,
+  searchAnimeByGenre,
+  fetchAnimeDetails
+} from "./jikanApi.js";
+import {
+  queryByGenre
+} from "./wikidataApi.js";
+import {
+  normalizeGenre,
+  getCanonicalGenres,
+  getApiGenre
+} from "./genreMapping.js";
 
 const SAMPLE_SHOWS = [
   {
@@ -28,6 +48,9 @@ const SAMPLE_SHOWS = [
 let currentSortMode = "soonest";
 let currentUser = null;
 let pendingImportData = null;
+let currentView = "my-shows"; // "my-shows", "airing", "popular"
+let currentContentType = "tv"; // "tv", "anime", "movies"
+let currentGenreFilter = null; // Selected genre filter in Popular view
 
 // Simple login functions - no OAuth2 required!
 async function getCurrentUser() {
@@ -487,22 +510,46 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (!showsContainer) return;
 
-  if (sortSelect) {
-    chrome.storage.sync.get("sortMode", (res) => {
-      if (res.sortMode) {
-        currentSortMode = res.sortMode;
-        sortSelect.value = currentSortMode;
-      }
-      loadAndRenderShows(showsContainer);
+  // Navigation tabs
+  const navTabs = document.querySelectorAll(".nav-tab");
+  navTabs.forEach(tab => {
+    tab.addEventListener("click", () => {
+      const view = tab.dataset.view;
+      switchView(view);
     });
+  });
 
+  // Content type toggles
+  const contentTypeButtons = document.querySelectorAll(".content-type-btn");
+  contentTypeButtons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const type = btn.dataset.type;
+      setContentType(type);
+    });
+  });
+
+  // Load saved view preference
+  chrome.storage.sync.get(["sortMode", "currentView"], (res) => {
+    if (res.sortMode) {
+      currentSortMode = res.sortMode;
+      if (sortSelect) sortSelect.value = currentSortMode;
+    }
+    if (res.currentView) {
+      currentView = res.currentView;
+      switchView(currentView, false);
+    } else {
+      loadAndRenderShows(showsContainer);
+    }
+  });
+
+  if (sortSelect) {
     sortSelect.addEventListener("change", async (e) => {
       currentSortMode = e.target.value;
       await chrome.storage.sync.set({ sortMode: currentSortMode });
-      loadAndRenderShows(showsContainer);
+      if (currentView === "my-shows") {
+        loadAndRenderShows(showsContainer);
+      }
     });
-  } else {
-    loadAndRenderShows(showsContainer);
   }
 
   if (searchBtn && searchInput && searchResultsEl) {
@@ -544,6 +591,507 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 });
 
+async function switchView(view, savePreference = true) {
+  currentView = view;
+  const showsContainer = document.getElementById("shows-container");
+  const sectionTitle = document.querySelector(".section-title");
+  const sortSelect = document.getElementById("sort-select");
+  const sortSelectContainer = document.querySelector(".shows-header");
+  
+  if (!showsContainer) return;
+
+  // Update active tab
+  document.querySelectorAll(".nav-tab").forEach(tab => {
+    if (tab.dataset.view === view) {
+      tab.classList.add("active");
+    } else {
+      tab.classList.remove("active");
+    }
+  });
+
+  // Show/hide content type toggles
+  const contentTypeToggles = document.getElementById("content-type-toggles");
+  if (contentTypeToggles) {
+    if (view === "popular" || view === "airing") {
+      contentTypeToggles.style.display = "flex";
+    } else {
+      contentTypeToggles.style.display = "none";
+    }
+  }
+
+  // Show/hide genre filters (only in Popular view)
+  const genreFilters = document.getElementById("genre-filters");
+  if (genreFilters) {
+    if (view === "popular") {
+      genreFilters.style.display = "block";
+      initializeGenreFilters();
+    } else {
+      genreFilters.style.display = "none";
+      currentGenreFilter = null;
+    }
+  }
+
+  // Show/hide sort select based on view
+  if (sortSelectContainer) {
+    if (view === "my-shows") {
+      sortSelectContainer.style.display = "flex";
+    } else {
+      sortSelectContainer.style.display = "none";
+    }
+  }
+
+  // Update section title
+  if (sectionTitle) {
+    if (view === "my-shows") {
+      sectionTitle.textContent = "Your shows";
+    } else if (view === "airing") {
+      sectionTitle.textContent = "Airing today";
+    } else if (view === "popular") {
+      sectionTitle.textContent = "Popular shows";
+    }
+  }
+
+  // Load appropriate content
+  if (view === "my-shows") {
+    loadAndRenderShows(showsContainer);
+  } else if (view === "airing") {
+    loadAndRenderAiringShows(showsContainer);
+  } else if (view === "popular") {
+    loadAndRenderPopularShows(showsContainer);
+  }
+
+  // Save preference
+  if (savePreference) {
+    await chrome.storage.sync.set({ currentView: view });
+  }
+}
+
+async function loadAndRenderAiringShows(container) {
+  container.innerHTML = "<div class='card show-card'>Loading shows airing today...</div>";
+  
+  try {
+    let shows = [];
+    
+    if (currentContentType === "tv") {
+      const tvShows = await fetchScheduleToday();
+      shows = await Promise.all(
+        tvShows.map(async (show) => {
+          try {
+            const episodes = await fetchEpisodes(show.id);
+            const nextEpisode = computeNextEpisode(episodes);
+            return {
+              ...show,
+              nextEpisode,
+              watched: false,
+              watchedAt: null,
+              contentType: "tv"
+            };
+          } catch (err) {
+            console.error(`Failed to fetch episodes for ${show.name}:`, err);
+            return {
+              ...show,
+              nextEpisode: null,
+              watched: false,
+              watchedAt: null,
+              contentType: "tv"
+            };
+          }
+        })
+      );
+    } else if (currentContentType === "anime") {
+      const animeList = await fetchAiringAnime();
+      // Cross-check with TVmaze for countdowns
+      shows = await Promise.all(
+        animeList.map(async (anime) => {
+          let tvmazeData = null;
+          let nextEpisode = null;
+          
+          // Try to find in TVmaze by searching title
+          try {
+            tvmazeData = await searchByTitle(anime.nameEnglish || anime.name);
+            if (tvmazeData && tvmazeData.id) {
+              // Check if it has episodes and countdown
+              const episodes = await fetchEpisodes(tvmazeData.id);
+              nextEpisode = computeNextEpisode(episodes);
+              // Use TVmaze image if better
+              if (tvmazeData.image && !anime.image) {
+                anime.image = tvmazeData.image;
+              }
+            }
+          } catch (err) {
+            // Ignore TVmaze lookup errors
+          }
+          
+          return {
+            ...anime,
+            nextEpisode: nextEpisode,
+            watched: false,
+            watchedAt: null,
+            contentType: "anime",
+            tvmazeId: tvmazeData?.id || null
+          };
+        })
+      );
+    } else if (currentContentType === "movies") {
+      // Movies don't have "airing" episodes, but show them with "Not episodic" label
+      // Try to get some popular movies from Wikidata
+      const wikidataResults = await queryByGenre("Action", ["movies"], 10);
+      shows = await Promise.all(
+        wikidataResults.map(async (item) => {
+          // Try to cross-check with TVmaze for images
+          let tvmazeData = null;
+          if (item.imdbId) {
+            tvmazeData = await lookupByImdb(item.imdbId);
+          }
+          if (!tvmazeData) {
+            tvmazeData = await searchByTitle(item.name);
+          }
+          
+          return {
+            id: `wd-${item.wikidataId}`,
+            name: item.name,
+            genres: tvmazeData?.genres || [],
+            status: tvmazeData?.status || null,
+            summary: tvmazeData?.summary || "",
+            image: tvmazeData?.image || null,
+            nextEpisode: null, // Movies are not episodic
+            watched: false,
+            watchedAt: null,
+            contentType: "movies",
+            imdbId: item.imdbId,
+            tvmazeId: tvmazeData?.id || null
+          };
+        })
+      );
+    }
+    
+    if (!shows.length) {
+      container.innerHTML = `<div class='card show-card'>No ${currentContentType === "tv" ? "TV shows" : "anime"} airing today.</div>`;
+      return;
+    }
+    
+    renderShows(container, shows, { interactive: false, clickable: true });
+  } catch (err) {
+    console.error("Failed to load airing shows:", err);
+    container.innerHTML = "<div class='card show-card'>Failed to load shows airing today.</div>";
+  }
+}
+
+async function loadAndRenderPopularShows(container) {
+  container.innerHTML = "<div class='card show-card'>Loading popular shows...</div>";
+  
+  try {
+    let shows = [];
+    
+    if (currentGenreFilter) {
+      // Load by genre
+      shows = await loadAndRenderByGenre(currentGenreFilter, currentContentType);
+    } else {
+      // Load popular by content type
+      if (currentContentType === "tv") {
+        const tvShows = await fetchPopularShows();
+        shows = await Promise.all(
+          tvShows.map(async (show) => {
+            try {
+              const episodes = await fetchEpisodes(show.id);
+              const nextEpisode = computeNextEpisode(episodes);
+              return {
+                ...show,
+                nextEpisode,
+                watched: false,
+                watchedAt: null,
+                contentType: "tv"
+              };
+            } catch (err) {
+              console.error(`Failed to fetch episodes for ${show.name}:`, err);
+              return {
+                ...show,
+                nextEpisode: null,
+                watched: false,
+                watchedAt: null,
+                contentType: "tv"
+              };
+            }
+          })
+        );
+      } else if (currentContentType === "anime") {
+        // Fetch top airing anime if no genre filter, otherwise use genre
+        let animeList = [];
+        if (currentGenreFilter) {
+          animeList = await fetchPopularAnime(currentGenreFilter);
+        } else {
+          animeList = await fetchAiringAnime();
+          // Also get some popular ones
+          const popular = await fetchPopularAnime("Action"); // Default genre
+          const existingIds = new Set(animeList.map(a => a.id));
+          const newAnime = popular.filter(a => !existingIds.has(a.id));
+          animeList = [...animeList, ...newAnime].slice(0, 20);
+        }
+        // Cross-check with TVmaze for countdowns and better images
+        shows = await Promise.all(
+          animeList.map(async (anime) => {
+            let tvmazeData = null;
+            let nextEpisode = null;
+            
+            // Try to find in TVmaze by searching title
+            try {
+              tvmazeData = await searchByTitle(anime.nameEnglish || anime.name);
+              if (tvmazeData && tvmazeData.id) {
+                // Check if it has episodes and countdown
+                const episodes = await fetchEpisodes(tvmazeData.id);
+                nextEpisode = computeNextEpisode(episodes);
+                // Use TVmaze image if better
+                if (tvmazeData.image && !anime.image) {
+                  anime.image = tvmazeData.image;
+                }
+              }
+            } catch (err) {
+              // Ignore TVmaze lookup errors
+            }
+            
+            return {
+              ...anime,
+              nextEpisode: nextEpisode,
+              watched: false,
+              watchedAt: null,
+              contentType: "anime",
+              tvmazeId: tvmazeData?.id || null
+            };
+          })
+        );
+      } else if (currentContentType === "movies") {
+        // For movies, fetch from a common genre like "Drama" or "Action"
+        const wikidataResults = await queryByGenre("Drama", ["movies"], 20);
+        // Cross-check with TVmaze for images and metadata
+        shows = await Promise.all(
+          wikidataResults.map(async (item) => {
+            let tvmazeData = null;
+            
+            // Try IMDb lookup first, then title search
+            if (item.imdbId) {
+              tvmazeData = await lookupByImdb(item.imdbId);
+            }
+            if (!tvmazeData) {
+              tvmazeData = await searchByTitle(item.name);
+            }
+            
+            return {
+              id: `wd-${item.wikidataId}`,
+              name: item.name,
+              genres: tvmazeData?.genres || [],
+              status: tvmazeData?.status || null,
+              summary: tvmazeData?.summary || "",
+              image: tvmazeData?.image || null,
+              nextEpisode: null, // Movies are not episodic
+              watched: false,
+              watchedAt: null,
+              contentType: "movies",
+              imdbId: item.imdbId,
+              tvmazeId: tvmazeData?.id || null
+            };
+          })
+        );
+      }
+    }
+    
+    if (!shows.length) {
+      container.innerHTML = `<div class='card show-card'>No popular ${currentContentType} found.</div>`;
+      return;
+    }
+    
+    renderShows(container, shows, { interactive: false, clickable: true });
+  } catch (err) {
+    console.error("Failed to load popular shows:", err);
+    container.innerHTML = "<div class='card show-card'>Failed to load popular shows.</div>";
+  }
+}
+
+async function loadAndRenderByGenre(genre, contentType) {
+  try {
+    const normalizedGenre = normalizeGenre(genre);
+    let shows = [];
+    
+    if (contentType === "tv") {
+      // Use TVmaze with popularity scoring
+      shows = await searchShowsByGenreWithPopularity(getApiGenre(normalizedGenre, "tvmaze"));
+      shows = await Promise.all(
+        shows.map(async (show) => {
+          try {
+            const episodes = await fetchEpisodes(show.id);
+            const nextEpisode = computeNextEpisode(episodes);
+            return {
+              ...show,
+              nextEpisode,
+              watched: false,
+              watchedAt: null,
+              contentType: "tv"
+            };
+          } catch (err) {
+            return {
+              ...show,
+              nextEpisode: null,
+              watched: false,
+              watchedAt: null,
+              contentType: "tv"
+            };
+          }
+        })
+      );
+    } else if (contentType === "anime") {
+      // Use Jikan
+      let animeList = await fetchPopularAnime(getApiGenre(normalizedGenre, "jikan"));
+      // Cross-check with TVmaze for countdowns and images
+      shows = await Promise.all(
+        animeList.map(async (anime) => {
+          let tvmazeData = null;
+          let nextEpisode = null;
+          
+          // Try to find in TVmaze by searching title
+          try {
+            tvmazeData = await searchByTitle(anime.nameEnglish || anime.name);
+            if (tvmazeData && tvmazeData.id) {
+              // Check if it has episodes and countdown
+              const episodes = await fetchEpisodes(tvmazeData.id);
+              nextEpisode = computeNextEpisode(episodes);
+              // Use TVmaze image if better
+              if (tvmazeData.image && !anime.image) {
+                anime.image = tvmazeData.image;
+              }
+            }
+          } catch (err) {
+            // Ignore TVmaze lookup errors
+          }
+          
+          return {
+            ...anime,
+            nextEpisode: nextEpisode,
+            watched: false,
+            watchedAt: null,
+            contentType: "anime",
+            tvmazeId: tvmazeData?.id || null
+          };
+        })
+      );
+    } else if (contentType === "movies") {
+      // Use Wikidata
+      const wikidataResults = await queryByGenre(normalizedGenre, ["movies"], 20);
+      // Cross-check with TVmaze for images and metadata
+      shows = await Promise.all(
+        wikidataResults.map(async (item) => {
+          let tvmazeData = null;
+          
+          // Try IMDb lookup first, then title search
+          if (item.imdbId) {
+            tvmazeData = await lookupByImdb(item.imdbId);
+          }
+          if (!tvmazeData) {
+            tvmazeData = await searchByTitle(item.name);
+          }
+          
+          return {
+            id: `wd-${item.wikidataId}`,
+            name: item.name,
+            genres: tvmazeData?.genres || [],
+            status: tvmazeData?.status || null,
+            summary: tvmazeData?.summary || "",
+            image: tvmazeData?.image || null,
+            nextEpisode: null, // Movies are not episodic
+            watched: false,
+            watchedAt: null,
+            contentType: "movies",
+            imdbId: item.imdbId,
+            tvmazeId: tvmazeData?.id || null
+          };
+        })
+      );
+    }
+    
+    return shows;
+  } catch (err) {
+    console.error("Failed to load by genre:", err);
+    return [];
+  }
+}
+
+function initializeGenreFilters() {
+  const genreFiltersList = document.getElementById("genre-filters-list");
+  if (!genreFiltersList) return;
+
+  const genres = getCanonicalGenres();
+  genreFiltersList.innerHTML = "";
+
+  // Add "All" button
+  const allBtn = document.createElement("button");
+  allBtn.className = "genre-filter-chip";
+  allBtn.textContent = "All";
+  allBtn.dataset.genre = "";
+  if (!currentGenreFilter) {
+    allBtn.classList.add("active");
+  }
+  allBtn.addEventListener("click", () => {
+    currentGenreFilter = null;
+    updateGenreFilterButtons();
+    const container = document.getElementById("shows-container");
+    if (container && currentView === "popular") {
+      loadAndRenderPopularShows(container);
+    }
+  });
+  genreFiltersList.appendChild(allBtn);
+
+  // Add genre buttons
+  genres.forEach(genre => {
+    const chip = document.createElement("button");
+    chip.className = "genre-filter-chip";
+    chip.textContent = genre;
+    chip.dataset.genre = genre;
+    if (currentGenreFilter === genre) {
+      chip.classList.add("active");
+    }
+    chip.addEventListener("click", () => {
+      currentGenreFilter = genre;
+      updateGenreFilterButtons();
+      const container = document.getElementById("shows-container");
+      if (container && currentView === "popular") {
+        loadAndRenderPopularShows(container);
+      }
+    });
+    genreFiltersList.appendChild(chip);
+  });
+}
+
+function updateGenreFilterButtons() {
+  document.querySelectorAll(".genre-filter-chip").forEach(btn => {
+    if (btn.dataset.genre === (currentGenreFilter || "")) {
+      btn.classList.add("active");
+    } else {
+      btn.classList.remove("active");
+    }
+  });
+}
+
+async function setContentType(type) {
+  currentContentType = type;
+  
+  // Update active button
+  document.querySelectorAll(".content-type-btn").forEach(btn => {
+    if (btn.dataset.type === type) {
+      btn.classList.add("active");
+    } else {
+      btn.classList.remove("active");
+    }
+  });
+
+  // Reload current view
+  const container = document.getElementById("shows-container");
+  if (!container) return;
+
+  if (currentView === "airing") {
+    loadAndRenderAiringShows(container);
+  } else if (currentView === "popular") {
+    loadAndRenderPopularShows(container);
+  }
+}
+
 async function loadAndRenderShows(container) {
   // chrome.storage.sync automatically syncs per Chrome account - no auth needed!
   const stored = await chrome.storage.sync.get("shows");
@@ -556,20 +1104,20 @@ async function loadAndRenderShows(container) {
   }
 }
 
-function renderShows(container, shows, options = { interactive: true }) {
+function renderShows(container, shows, options = { interactive: true, clickable: false }) {
   container.innerHTML = "";
   if (!shows.length) {
     const empty = document.createElement("div");
     empty.className = "card show-card";
-    empty.textContent = "No shows tracked yet. Click “Add Show” to begin.";
+    empty.textContent = "No shows tracked yet. Click 'Add Show' to begin.";
     container.appendChild(empty);
     return;
   }
 
-  const ordered = sortShows(shows, currentSortMode);
+  const ordered = currentView === "my-shows" ? sortShows(shows, currentSortMode) : shows;
 
   for (const show of ordered) {
-    const card = createShowCard(show, options.interactive);
+    const card = createShowCard(show, options.interactive, options.clickable);
     container.appendChild(card);
   }
 
@@ -578,9 +1126,13 @@ function renderShows(container, shows, options = { interactive: true }) {
 
 let countdownIntervalId = null;
 
-function createShowCard(show, interactive) {
+function createShowCard(show, interactive, clickable = false) {
   const card = document.createElement("div");
   card.className = "card show-card";
+  if (clickable) {
+    card.style.cursor = "pointer";
+    card.title = "Click to add to your shows";
+  }
 
   if (show.image) {
     card.classList.add("has-image");
@@ -608,6 +1160,14 @@ function createShowCard(show, interactive) {
   title.className = "show-title";
   title.textContent = show.name;
 
+  // Add content type badge
+  const contentType = show.contentType || "tv";
+  const typeBadge = document.createElement("span");
+  typeBadge.className = "content-type-badge";
+  typeBadge.textContent = contentType === "anime" ? "🎌" : contentType === "movies" ? "🎬" : "📺";
+  typeBadge.title = contentType === "anime" ? "Anime" : contentType === "movies" ? "Movie" : "TV Show";
+  title.appendChild(typeBadge);
+
   const sub = document.createElement("div");
   sub.className = "show-countdown";
   const genreList = Array.isArray(show.genres) ? show.genres : [];
@@ -634,23 +1194,32 @@ function createShowCard(show, interactive) {
     header.appendChild(removeBtn);
   }
 
-  const countdownInfo = getCountdownInfo(show.nextEpisode?.airstamp);
+  // Handle movies differently - show "Not episodic" instead of countdown
+  const isMovie = contentType === "movies";
   const meta = document.createElement("div");
   meta.className = "show-countdown";
-  meta.textContent = countdownInfo.label;
-
+  
   const timer = document.createElement("div");
   timer.className = "show-timer";
-  if (show.nextEpisode?.airstamp) {
-    timer.dataset.airstamp = show.nextEpisode.airstamp;
+  
+  if (isMovie) {
+    meta.textContent = "Not episodic";
+    timer.textContent = "Movies are not episodic content";
+    timer.className = "show-timer movie-timer";
+  } else {
+    const countdownInfo = getCountdownInfo(show.nextEpisode?.airstamp);
+    meta.textContent = countdownInfo.label;
+    if (show.nextEpisode?.airstamp) {
+      timer.dataset.airstamp = show.nextEpisode.airstamp;
+    }
+    updateTimerElement(timer, countdownInfo);
   }
-  updateTimerElement(timer, countdownInfo);
 
   content.appendChild(header);
   content.appendChild(timer);
   card.appendChild(content);
 
-  if (interactive) {
+  if (interactive || clickable) {
     attachDetailsToggle(card, show);
   }
 
@@ -664,6 +1233,13 @@ function attachDetailsToggle(card, show) {
     if (target instanceof HTMLElement && target.closest(".show-remove")) {
       return;
     }
+    
+    // If not in "my-shows" view, add the show instead of showing details
+    if (currentView !== "my-shows") {
+      addShowFromSearch(show);
+      return;
+    }
+    
     toggleShowDetails(card, show);
   });
 }
@@ -975,6 +1551,95 @@ function debounce(fn, delay) {
   };
 }
 
+async function searchByGenre(genre, inputEl, resultsEl) {
+  inputEl.value = genre;
+  resultsEl.textContent = "Searching…";
+
+  try {
+    const results = await searchShowsByGenre(genre);
+    if (!results.length) {
+      resultsEl.textContent = `No ${genre} shows found.`;
+      return;
+    }
+
+    resultsEl.innerHTML = "";
+    results.forEach((show, index) => {
+      const item = createSearchResultItem(show, index, inputEl, resultsEl);
+      resultsEl.appendChild(item);
+    });
+  } catch (err) {
+    console.error(err);
+    resultsEl.textContent = "Offline or TVmaze unavailable.";
+  }
+}
+
+function createSearchResultItem(show, index, inputEl, resultsEl) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = "search-result-item anim-in";
+  item.style.animationDelay = `${index * 30}ms`;
+
+  const main = document.createElement("div");
+  main.className = "search-result-main";
+
+  if (show.image) {
+    const art = document.createElement("img");
+    art.className = "search-result-art";
+    art.src = show.image;
+    art.alt = `${show.name} poster`;
+    main.appendChild(art);
+  }
+
+  const textWrap = document.createElement("div");
+
+  const title = document.createElement("span");
+  title.className = "search-result-title";
+  title.textContent = show.name;
+  textWrap.appendChild(title);
+
+  if (show.premiered || show.status) {
+    const meta = document.createElement("span");
+    meta.className = "search-result-meta";
+    const year = show.premiered ? show.premiered.slice(0, 4) : "";
+    const status = show.status || "";
+    meta.textContent = [year, status].filter(Boolean).join(" • ");
+    textWrap.appendChild(meta);
+  }
+
+  // Add clickable genres
+  if (show.genres && show.genres.length > 0) {
+    const genresContainer = document.createElement("div");
+    genresContainer.className = "search-result-genres";
+    show.genres.forEach((genre) => {
+      const genreTag = document.createElement("span");
+      genreTag.className = "search-genre-tag";
+      genreTag.textContent = genre;
+      genreTag.title = `Search for ${genre} shows`;
+      genreTag.addEventListener("click", (e) => {
+        e.stopPropagation(); // Prevent adding the show when clicking genre
+        searchByGenre(genre, inputEl, resultsEl);
+      });
+      genresContainer.appendChild(genreTag);
+    });
+    textWrap.appendChild(genresContainer);
+  }
+
+  main.appendChild(textWrap);
+
+  const right = document.createElement("span");
+  right.className = "search-result-year";
+  right.textContent = "Add";
+
+  item.appendChild(main);
+  item.appendChild(right);
+
+  item.addEventListener("click", () => {
+    addShowFromSearch(show);
+  });
+
+  return item;
+}
+
 async function runSearch(inputEl, resultsEl) {
   const query = inputEl.value;
   resultsEl.textContent = "Searching…";
@@ -982,57 +1647,13 @@ async function runSearch(inputEl, resultsEl) {
   try {
     const results = await searchShows(query);
     if (!results.length) {
-      resultsEl.textContent = "No results.";
+      resultsEl.textContent = "No results. Try a different search term.";
       return;
     }
 
     resultsEl.innerHTML = "";
     results.forEach((show, index) => {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = "search-result-item anim-in";
-      item.style.animationDelay = `${index * 30}ms`;
-
-      const main = document.createElement("div");
-      main.className = "search-result-main";
-
-      if (show.image) {
-        const art = document.createElement("img");
-        art.className = "search-result-art";
-        art.src = show.image;
-        art.alt = `${show.name} poster`;
-        main.appendChild(art);
-      }
-
-      const textWrap = document.createElement("div");
-
-      const title = document.createElement("span");
-      title.className = "search-result-title";
-      title.textContent = show.name;
-      textWrap.appendChild(title);
-
-      if (show.premiered || show.status) {
-        const meta = document.createElement("span");
-        meta.className = "search-result-meta";
-        const year = show.premiered ? show.premiered.slice(0, 4) : "";
-        const status = show.status || "";
-        meta.textContent = [year, status].filter(Boolean).join(" • ");
-        textWrap.appendChild(meta);
-      }
-
-      main.appendChild(textWrap);
-
-      const right = document.createElement("span");
-      right.className = "search-result-year";
-      right.textContent = "Add";
-
-      item.appendChild(main);
-      item.appendChild(right);
-
-      item.addEventListener("click", () => {
-        addShowFromSearch(show);
-      });
-
+      const item = createSearchResultItem(show, index, inputEl, resultsEl);
       resultsEl.appendChild(item);
     });
   } catch (err) {
@@ -1052,37 +1673,54 @@ async function addShowFromSearch(showSummary) {
     return;
   }
 
+  const contentType = showSummary.contentType || "tv";
   let nextEpisode = null;
   let fetchedAt = null;
   let showInfo = null;
+  let genres = Array.isArray(showSummary.genres) ? showSummary.genres : [];
+  let status = showSummary.status || null;
+  let summary = showSummary.summary || "";
+  let image = showSummary.image || null;
+
   try {
-    const [info, episodes] = await Promise.all([
-      fetchShow(showSummary.id),
-      fetchEpisodes(showSummary.id)
-    ]);
-    showInfo = info;
-    nextEpisode = computeNextEpisode(episodes);
-    fetchedAt = new Date().toISOString();
+    if (contentType === "anime" && showSummary.malId) {
+      // Fetch anime details from Jikan
+      showInfo = await fetchAnimeDetails(showSummary.malId);
+      if (showInfo) {
+        genres = showInfo.genres || genres;
+        status = showInfo.status || status;
+        summary = showInfo.synopsis || summary;
+        image = showInfo.image || image;
+        fetchedAt = new Date().toISOString();
+      }
+    } else if (contentType === "tv" && !showSummary.id.startsWith("wd-") && !showSummary.id.startsWith("mal-")) {
+      // Fetch TV show details from TVmaze
+      const [info, episodes] = await Promise.all([
+        fetchShow(showSummary.id),
+        fetchEpisodes(showSummary.id)
+      ]);
+      showInfo = info;
+      nextEpisode = computeNextEpisode(episodes);
+      fetchedAt = new Date().toISOString();
+      
+      if (showInfo) {
+        genres = Array.isArray(showInfo.genres) && showInfo.genres.length
+          ? showInfo.genres
+          : genres;
+        status = showInfo.status || status;
+        summary = typeof showInfo.summary === "string"
+          ? showInfo.summary.replace(/<[^>]+>/g, "")
+          : summary;
+        const imageFromInfo = showInfo.image && (showInfo.image.medium || showInfo.image.original);
+        image = imageFromInfo || image;
+      }
+    } else if (contentType === "movies") {
+      // Movies don't have episodes, just use the summary data
+      fetchedAt = new Date().toISOString();
+    }
   } catch (err) {
-    console.error("Failed to fetch episodes for new show", err);
+    console.error("Failed to fetch details for new show", err);
   }
-
-  const genres = Array.isArray(showInfo?.genres) && showInfo.genres.length
-    ? showInfo.genres
-    : Array.isArray(showSummary.genres)
-    ? showSummary.genres
-    : [];
-
-  const status = showInfo?.status || showSummary.status || null;
-
-  const summary =
-    typeof showInfo?.summary === "string"
-      ? showInfo.summary.replace(/<[^>]+>/g, "")
-      : showSummary.summary || "";
-
-  const imageFromInfo =
-    showInfo?.image && (showInfo.image.medium || showInfo.image.original);
-  const image = imageFromInfo || showSummary.image || null;
 
   const newShow = {
     id: showSummary.id,
@@ -1094,15 +1732,21 @@ async function addShowFromSearch(showSummary) {
     nextEpisode,
     allEpisodesLastFetchedAt: fetchedAt,
     watched: false,
-    watchedAt: null
+    watchedAt: null,
+    contentType: contentType
   };
 
   const updated = [...shows, newShow];
   await chrome.storage.sync.set({ shows: updated });
 
-  const container = document.getElementById("shows-container");
-  if (container) {
-    renderShows(container, updated, { interactive: true });
+  showToast(`Added ${newShow.name} to your shows!`);
+  
+  // If we're in my-shows view, refresh it
+  if (currentView === "my-shows") {
+    const container = document.getElementById("shows-container");
+    if (container) {
+      renderShows(container, updated, { interactive: true });
+    }
   }
 }
 
