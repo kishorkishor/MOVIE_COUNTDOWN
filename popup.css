@@ -41,6 +41,7 @@ body {
   box-shadow:
     0 14px 30px rgba(0, 0, 0, 0.9),
     0 0 0 1px rgba(30, 64, 175, 0.6);
+  position: relative;
 }
 
 .top-bar-left {
@@ -785,6 +786,111 @@ body {
 .login-btn-cancel:hover {
   transform: translateY(-1px);
   background: var(--glass-soft);
+}
+
+/* Profile Menu */
+.profile-menu {
+  position: absolute;
+  top: 40px;
+  right: 12px;
+  background: radial-gradient(circle at top left, #0f172a, #020617);
+  border-radius: 12px;
+  min-width: 200px;
+  box-shadow:
+    0 20px 40px rgba(0, 0, 0, 0.95),
+    0 0 0 1px rgba(108, 140, 255, 0.3);
+  z-index: 1001;
+  animation: popupEnter 180ms ease-out;
+  overflow: hidden;
+}
+
+.profile-menu-content {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0;
+}
+
+.profile-menu-header {
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.profile-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s ease-out;
+  text-align: left;
+  width: 100%;
+}
+
+.profile-menu-item:hover {
+  background: var(--glass-soft);
+}
+
+.profile-menu-item:active {
+  background: var(--glass);
+}
+
+.profile-menu-item span:first-child {
+  font-size: 16px;
+  width: 20px;
+  text-align: center;
+}
+
+.profile-menu-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 4px 0;
+}
+
+/* Toast Notification */
+.toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: radial-gradient(circle at top left, #0f172a, #020617);
+  color: var(--text);
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(108, 140, 255, 0.3);
+  z-index: 10000;
+  animation: toastSlideIn 0.3s ease-out;
+  max-width: 300px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.toast-success {
+  border-left: 3px solid #4ade80;
+}
+
+.toast-error {
+  border-left: 3px solid #ef4444;
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 
 

@@ -12,6 +12,30 @@
           <div class="top-logo">K</div>
         </div>
         <button id="user-btn" class="top-user-icon" aria-label="User profile"></button>
+        
+        <!-- Profile Menu -->
+        <div id="profile-menu" class="profile-menu" style="display: none;">
+          <div class="profile-menu-content">
+            <div id="profile-menu-header" class="profile-menu-header">
+              <span id="profile-menu-name">Profile</span>
+            </div>
+            <div class="profile-menu-divider"></div>
+            <button id="profile-export-btn" class="profile-menu-item">
+              <span>📥</span>
+              <span>Export Shows</span>
+            </button>
+            <button id="profile-import-btn" class="profile-menu-item">
+              <span>📤</span>
+              <span>Import Shows</span>
+            </button>
+            <input type="file" id="profile-import-file" accept=".json" style="display: none;" />
+            <div class="profile-menu-divider"></div>
+            <button id="profile-signin-btn" class="profile-menu-item">
+              <span>👤</span>
+              <span id="profile-signin-text">Sign In</span>
+            </button>
+          </div>
+        </div>
       </header>
 
       <!-- Login Modal -->
@@ -26,6 +50,36 @@
             <button id="login-cancel-btn" class="login-btn-cancel">Cancel</button>
           </div>
         </div>
+      </div>
+
+      <!-- Import Confirmation Modal -->
+      <div id="import-modal" class="login-modal" style="display: none;">
+        <div class="login-modal-content">
+          <h3>Import Shows</h3>
+          <p id="import-modal-message">This will import shows. How would you like to proceed?</p>
+          <div class="login-modal-buttons" style="flex-direction: column; gap: 10px;">
+            <button id="import-merge-btn" class="login-btn" style="width: 100%;">Merge with existing</button>
+            <button id="import-replace-btn" class="login-btn" style="width: 100%; background: linear-gradient(135deg, #ef4444, #dc2626);">Replace all shows</button>
+            <button id="import-cancel-btn" class="login-btn-cancel" style="width: 100%;">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Logout Confirmation Modal -->
+      <div id="logout-modal" class="login-modal" style="display: none;">
+        <div class="login-modal-content">
+          <h3>Sign Out</h3>
+          <p>Your shows will still be saved. Are you sure you want to sign out?</p>
+          <div class="login-modal-buttons">
+            <button id="logout-confirm-btn" class="login-btn">Sign Out</button>
+            <button id="logout-cancel-btn" class="login-btn-cancel">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Toast Notification -->
+      <div id="toast" class="toast" style="display: none;">
+        <span id="toast-message"></span>
       </div>
 
       <main class="popup-main">

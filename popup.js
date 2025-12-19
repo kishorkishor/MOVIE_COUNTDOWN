@@ -27,6 +27,7 @@ const SAMPLE_SHOWS = [
 
 let currentSortMode = "soonest";
 let currentUser = null;
+let pendingImportData = null;
 
 // Simple login functions - no OAuth2 required!
 async function getCurrentUser() {
@@ -68,8 +69,172 @@ function updateUserButtonUI(user) {
     userBtn.classList.add("signed-in");
   } else {
     userBtn.textContent = "👤";
-    userBtn.title = "Sign in";
+    userBtn.title = "Profile";
     userBtn.classList.remove("signed-in");
+  }
+
+  // Update profile menu
+  const profileMenuName = document.getElementById("profile-menu-name");
+  const profileSigninText = document.getElementById("profile-signin-text");
+  if (profileMenuName) {
+    profileMenuName.textContent = user ? user.name : "Profile";
+  }
+  if (profileSigninText) {
+    profileSigninText.textContent = user ? "Sign Out" : "Sign In";
+  }
+}
+
+function showProfileMenu() {
+  const menu = document.getElementById("profile-menu");
+  if (menu) {
+    menu.style.display = "block";
+  }
+}
+
+function hideProfileMenu() {
+  const menu = document.getElementById("profile-menu");
+  if (menu) {
+    menu.style.display = "none";
+  }
+}
+
+async function exportShows() {
+  try {
+    const stored = await chrome.storage.sync.get("shows");
+    const shows = Array.isArray(stored.shows) ? stored.shows : [];
+    
+    if (!shows.length) {
+      showToast("No shows to export. Add some shows first!", "error");
+      return;
+    }
+
+    const exportData = {
+      version: "1.0",
+      exportedAt: new Date().toISOString(),
+      shows: shows
+    };
+
+    const dataStr = JSON.stringify(exportData, null, 2);
+    const dataBlob = new Blob([dataStr], { type: "application/json" });
+    const url = URL.createObjectURL(dataBlob);
+    
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `tv-shows-backup-${new Date().toISOString().split("T")[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    hideProfileMenu();
+    showToast(`Exported ${shows.length} show(s) successfully!`);
+  } catch (err) {
+    console.error("Export error:", err);
+    showToast("Failed to export shows. Please try again.", "error");
+  }
+}
+
+async function importShows() {
+  const fileInput = document.getElementById("profile-import-file");
+  if (!fileInput) return;
+
+  fileInput.click();
+}
+
+function showImportModal(importData) {
+  const modal = document.getElementById("import-modal");
+  const message = document.getElementById("import-modal-message");
+  
+  if (!modal || !message) return;
+
+  const showCount = importData.shows.length;
+  message.textContent = `This will import ${showCount} show(s). How would you like to proceed?`;
+  
+  pendingImportData = importData;
+  modal.style.display = "flex";
+}
+
+function hideImportModal() {
+  const modal = document.getElementById("import-modal");
+  if (modal) {
+    modal.style.display = "none";
+  }
+  pendingImportData = null;
+}
+
+async function processImport(merge = false) {
+  if (!pendingImportData) return;
+
+  try {
+    const stored = await chrome.storage.sync.get("shows");
+    const existingShows = Array.isArray(stored.shows) ? stored.shows : [];
+    const showCount = pendingImportData.shows.length;
+
+    let finalShows;
+    if (merge) {
+      // Merge: combine existing and imported, avoiding duplicates
+      const existingIds = new Set(existingShows.map(s => s.id));
+      const newShows = pendingImportData.shows.filter(s => !existingIds.has(s.id));
+      finalShows = [...existingShows, ...newShows];
+      showToast(`Merged ${newShows.length} new show(s) with ${existingShows.length} existing show(s).`);
+    } else {
+      // Replace
+      finalShows = pendingImportData.shows;
+      showToast(`Replaced all shows with ${showCount} imported show(s).`);
+    }
+
+    await chrome.storage.sync.set({ shows: finalShows });
+
+    // Refresh the UI
+    const container = document.getElementById("shows-container");
+    if (container) {
+      loadAndRenderShows(container);
+    }
+
+    hideImportModal();
+    hideProfileMenu();
+  } catch (err) {
+    console.error("Import error:", err);
+    showToast("Failed to import shows. Please try again.", "error");
+    hideImportModal();
+  }
+}
+
+async function handleFileImport(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    const importData = JSON.parse(text);
+
+    // Validate the import data
+    if (!importData.shows || !Array.isArray(importData.shows)) {
+      showToast("Invalid file format. Please export a valid backup file first.", "error");
+      event.target.value = "";
+      return;
+    }
+
+    const showCount = importData.shows.length;
+    if (showCount === 0) {
+      showToast("The file contains no shows.", "error");
+      event.target.value = "";
+      return;
+    }
+
+    // Show custom modal instead of confirm dialog
+    showImportModal(importData);
+    
+    // Reset file input
+    event.target.value = "";
+  } catch (err) {
+    console.error("Import error:", err);
+    if (err instanceof SyntaxError) {
+      showToast("Invalid JSON file. Please check the file and try again.", "error");
+    } else {
+      showToast("Failed to import shows. Please try again.", "error");
+    }
+    event.target.value = "";
   }
 }
 
@@ -106,7 +271,7 @@ async function handleLogin() {
   const email = emailInput ? emailInput.value.trim() : "";
 
   if (!name) {
-    alert("Please enter your name");
+    showToast("Please enter your name", "error");
     return;
   }
 
@@ -118,13 +283,45 @@ async function handleLogin() {
   await setCurrentUser(user);
   updateUserButtonUI(user);
   hideLoginModal();
+  showToast(`Signed in as ${user.name}`);
+}
+
+// Toast notification system
+function showToast(message, type = "success") {
+  const toast = document.getElementById("toast");
+  const toastMessage = document.getElementById("toast-message");
+  
+  if (!toast || !toastMessage) return;
+
+  toastMessage.textContent = message;
+  toast.className = `toast toast-${type}`;
+  toast.style.display = "block";
+
+  // Auto-hide after 3 seconds
+  setTimeout(() => {
+    toast.style.display = "none";
+  }, 3000);
+}
+
+function showLogoutModal() {
+  const modal = document.getElementById("logout-modal");
+  if (modal) {
+    modal.style.display = "flex";
+  }
+}
+
+function hideLogoutModal() {
+  const modal = document.getElementById("logout-modal");
+  if (modal) {
+    modal.style.display = "none";
+  }
 }
 
 async function handleLogout() {
-  if (confirm("Sign out? Your shows will still be saved.")) {
-    await clearCurrentUser();
-    updateUserButtonUI(null);
-  }
+  await clearCurrentUser();
+  updateUserButtonUI(null);
+  hideLogoutModal();
+  showToast("Signed out");
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -140,13 +337,108 @@ document.addEventListener("DOMContentLoaded", async () => {
   const sortSelect = document.getElementById("sort-select");
   const userBtn = document.getElementById("user-btn");
 
-  // Handle user button click
+  // Handle user button click - show profile menu
   if (userBtn) {
-    userBtn.addEventListener("click", () => {
+    userBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const menu = document.getElementById("profile-menu");
+      if (menu && menu.style.display === "block") {
+        hideProfileMenu();
+      } else {
+        showProfileMenu();
+      }
+    });
+  }
+
+  // Close profile menu when clicking outside
+  document.addEventListener("click", (e) => {
+    const menu = document.getElementById("profile-menu");
+    const userBtn = document.getElementById("user-btn");
+    if (menu && userBtn && !menu.contains(e.target) && !userBtn.contains(e.target)) {
+      hideProfileMenu();
+    }
+  });
+
+  // Profile menu buttons
+  const profileExportBtn = document.getElementById("profile-export-btn");
+  const profileImportBtn = document.getElementById("profile-import-btn");
+  const profileImportFile = document.getElementById("profile-import-file");
+  const profileSigninBtn = document.getElementById("profile-signin-btn");
+
+  if (profileExportBtn) {
+    profileExportBtn.addEventListener("click", exportShows);
+  }
+
+  if (profileImportBtn) {
+    profileImportBtn.addEventListener("click", importShows);
+  }
+
+  if (profileImportFile) {
+    profileImportFile.addEventListener("change", handleFileImport);
+  }
+
+  if (profileSigninBtn) {
+    profileSigninBtn.addEventListener("click", () => {
+      hideProfileMenu();
       if (currentUser) {
-        handleLogout();
+        showLogoutModal();
       } else {
         showLoginModal();
+      }
+    });
+  }
+
+  // Logout modal buttons
+  const logoutConfirmBtn = document.getElementById("logout-confirm-btn");
+  const logoutCancelBtn = document.getElementById("logout-cancel-btn");
+
+  if (logoutConfirmBtn) {
+    logoutConfirmBtn.addEventListener("click", handleLogout);
+  }
+
+  if (logoutCancelBtn) {
+    logoutCancelBtn.addEventListener("click", hideLogoutModal);
+  }
+
+  // Close logout modal when clicking outside
+  const logoutModal = document.getElementById("logout-modal");
+  if (logoutModal) {
+    logoutModal.addEventListener("click", (e) => {
+      if (e.target === logoutModal) {
+        hideLogoutModal();
+      }
+    });
+  }
+
+  // Import modal buttons
+  const importMergeBtn = document.getElementById("import-merge-btn");
+  const importReplaceBtn = document.getElementById("import-replace-btn");
+  const importCancelBtn = document.getElementById("import-cancel-btn");
+
+  if (importMergeBtn) {
+    importMergeBtn.addEventListener("click", () => {
+      processImport(true);
+    });
+  }
+
+  if (importReplaceBtn) {
+    importReplaceBtn.addEventListener("click", () => {
+      processImport(false);
+    });
+  }
+
+  if (importCancelBtn) {
+    importCancelBtn.addEventListener("click", () => {
+      hideImportModal();
+    });
+  }
+
+  // Close import modal when clicking outside
+  const importModal = document.getElementById("import-modal");
+  if (importModal) {
+    importModal.addEventListener("click", (e) => {
+      if (e.target === importModal) {
+        hideImportModal();
       }
     });
   }
