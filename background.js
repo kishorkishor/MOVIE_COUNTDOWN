@@ -17,7 +17,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 async function refreshAllShows() {
-  const stored = await chrome.storage.local.get("shows");
+  // chrome.storage.sync automatically syncs per Chrome account
+  const stored = await chrome.storage.sync.get("shows");
   const shows = Array.isArray(stored.shows) ? stored.shows : [];
   if (!shows.length) return;
 
@@ -51,6 +52,6 @@ async function refreshAllShows() {
     updated.push(updatedShow);
   }
 
-  await chrome.storage.local.set({ shows: updated });
+  await chrome.storage.sync.set({ shows: updated });
 }
 

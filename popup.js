@@ -26,13 +26,172 @@ const SAMPLE_SHOWS = [
 ];
 
 let currentSortMode = "soonest";
+let currentUser = null;
 
-document.addEventListener("DOMContentLoaded", () => {
+// Simple login functions - no OAuth2 required!
+async function getCurrentUser() {
+  try {
+    const result = await chrome.storage.sync.get("currentUser");
+    return result.currentUser || null;
+  } catch (err) {
+    console.error("Error getting current user:", err);
+    return null;
+  }
+}
+
+async function setCurrentUser(user) {
+  try {
+    await chrome.storage.sync.set({ currentUser: user });
+    currentUser = user;
+  } catch (err) {
+    console.error("Error setting current user:", err);
+  }
+}
+
+async function clearCurrentUser() {
+  try {
+    await chrome.storage.sync.remove("currentUser");
+    currentUser = null;
+  } catch (err) {
+    console.error("Error clearing current user:", err);
+  }
+}
+
+function updateUserButtonUI(user) {
+  const userBtn = document.getElementById("user-btn");
+  if (!userBtn) return;
+
+  if (user) {
+    const initial = user.name ? user.name.charAt(0).toUpperCase() : "👤";
+    userBtn.textContent = initial;
+    userBtn.title = user.email ? `Signed in as ${user.name} (${user.email})` : `Signed in as ${user.name}`;
+    userBtn.classList.add("signed-in");
+  } else {
+    userBtn.textContent = "👤";
+    userBtn.title = "Sign in";
+    userBtn.classList.remove("signed-in");
+  }
+}
+
+function showLoginModal() {
+  const modal = document.getElementById("login-modal");
+  if (modal) {
+    modal.style.display = "flex";
+    const nameInput = document.getElementById("login-name-input");
+    if (nameInput) {
+      nameInput.focus();
+      nameInput.value = "";
+    }
+    const emailInput = document.getElementById("login-email-input");
+    if (emailInput) {
+      emailInput.value = "";
+    }
+  }
+}
+
+function hideLoginModal() {
+  const modal = document.getElementById("login-modal");
+  if (modal) {
+    modal.style.display = "none";
+  }
+}
+
+async function handleLogin() {
+  const nameInput = document.getElementById("login-name-input");
+  const emailInput = document.getElementById("login-email-input");
+  
+  if (!nameInput) return;
+
+  const name = nameInput.value.trim();
+  const email = emailInput ? emailInput.value.trim() : "";
+
+  if (!name) {
+    alert("Please enter your name");
+    return;
+  }
+
+  const user = {
+    name: name,
+    email: email || null
+  };
+
+  await setCurrentUser(user);
+  updateUserButtonUI(user);
+  hideLoginModal();
+}
+
+async function handleLogout() {
+  if (confirm("Sign out? Your shows will still be saved.")) {
+    await clearCurrentUser();
+    updateUserButtonUI(null);
+  }
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  // Initialize user
+  currentUser = await getCurrentUser();
+  updateUserButtonUI(currentUser);
   const searchInput = document.getElementById("search-input");
   const searchBtn = document.getElementById("search-btn");
   const searchResultsEl = document.getElementById("search-results");
+  const clearSearchBtn = document.getElementById("clear-search-btn");
+  const searchShell = document.querySelector(".search-shell");
   const showsContainer = document.getElementById("shows-container");
   const sortSelect = document.getElementById("sort-select");
+  const userBtn = document.getElementById("user-btn");
+
+  // Handle user button click
+  if (userBtn) {
+    userBtn.addEventListener("click", () => {
+      if (currentUser) {
+        handleLogout();
+      } else {
+        showLoginModal();
+      }
+    });
+  }
+
+  // Handle login modal
+  const loginSubmitBtn = document.getElementById("login-submit-btn");
+  const loginCancelBtn = document.getElementById("login-cancel-btn");
+  const loginNameInput = document.getElementById("login-name-input");
+  const loginEmailInput = document.getElementById("login-email-input");
+
+  if (loginSubmitBtn) {
+    loginSubmitBtn.addEventListener("click", handleLogin);
+  }
+
+  if (loginCancelBtn) {
+    loginCancelBtn.addEventListener("click", hideLoginModal);
+  }
+
+  if (loginNameInput) {
+    loginNameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        handleLogin();
+      }
+    });
+  }
+
+  if (loginEmailInput) {
+    loginEmailInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        handleLogin();
+      }
+    });
+  }
+
+  // Close modal when clicking outside
+  const loginModal = document.getElementById("login-modal");
+  if (loginModal) {
+    loginModal.addEventListener("click", (e) => {
+      if (e.target === loginModal) {
+        hideLoginModal();
+      }
+    });
+  }
 
   if (!showsContainer) return;
 
@@ -65,6 +224,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     searchInput.addEventListener("input", () => {
       debouncedSearch();
+      if (searchShell) {
+        if (searchInput.value.trim().length) {
+          searchShell.classList.add("has-text");
+        } else {
+          searchShell.classList.remove("has-text");
+        }
+      }
     });
 
     searchInput.addEventListener("keydown", (e) => {
@@ -75,10 +241,20 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  if (clearSearchBtn && searchInput && searchResultsEl && searchShell) {
+    clearSearchBtn.addEventListener("click", () => {
+      searchInput.value = "";
+      searchShell.classList.remove("has-text");
+      searchInput.focus();
+      searchResultsEl.innerHTML = "";
+    });
+  }
+
 });
 
 async function loadAndRenderShows(container) {
-  const stored = await chrome.storage.local.get("shows");
+  // chrome.storage.sync automatically syncs per Chrome account - no auth needed!
+  const stored = await chrome.storage.sync.get("shows");
   const shows = Array.isArray(stored.shows) ? stored.shows : [];
 
   if (!shows.length) {
@@ -216,45 +392,98 @@ function toggleShowDetails(card, show) {
 }
 
 async function populateShowDetails(detailsEl, show) {
+  const cleanText = (htmlString) => {
+    if (typeof htmlString !== "string") return "";
+    return htmlString.replace(/<[^>]+>/g, "").trim();
+  };
+
+  const fallbackSummary = cleanText(show.summary || "");
+  const fallbackGenres = Array.isArray(show.genres) ? show.genres : [];
+  const fallbackStatus = show.status || "Unknown";
+
+  // Build a details shell immediately so something shows even if network fails.
+  detailsEl.innerHTML = "";
+
+  const summaryLine = document.createElement("div");
+  summaryLine.className = "show-details-line";
+  const summaryLabel = document.createElement("span");
+  summaryLabel.className = "show-details-label";
+  summaryLabel.textContent = "Summary";
+  const summaryValue = document.createElement("span");
+  summaryValue.textContent =
+    fallbackSummary.length > 0 ? fallbackSummary : "No summary available.";
+  summaryLine.appendChild(summaryLabel);
+  summaryLine.appendChild(summaryValue);
+
+  const genresLine = document.createElement("div");
+  genresLine.className = "show-details-line";
+  const genresLabel = document.createElement("span");
+  genresLabel.className = "show-details-label";
+  genresLabel.textContent = "Genres";
+  const genresValue = document.createElement("span");
+  genresValue.textContent =
+    fallbackGenres.length > 0 ? fallbackGenres.join(", ") : "Unknown genre";
+  genresLine.appendChild(genresLabel);
+  genresLine.appendChild(genresValue);
+
+  const statusLine = document.createElement("div");
+  statusLine.className = "show-details-line";
+  const statusLabel = document.createElement("span");
+  statusLabel.className = "show-details-label";
+  statusLabel.textContent = "Status";
+  const statusValue = document.createElement("span");
+  statusValue.textContent = fallbackStatus;
+  statusLine.appendChild(statusLabel);
+  statusLine.appendChild(statusValue);
+
+  const episodesLine = document.createElement("div");
+  episodesLine.className = "show-details-line";
+  const episodesLineLabel = document.createElement("span");
+  episodesLineLabel.className = "show-details-label";
+  episodesLineLabel.textContent = "Episodes";
+  const episodesLineValue = document.createElement("span");
+  episodesLineValue.textContent = "Loading…";
+  episodesLine.appendChild(episodesLineLabel);
+  episodesLine.appendChild(episodesLineValue);
+
+  const nextLine = document.createElement("div");
+  nextLine.className = "show-details-line";
+
+  const episodesList = document.createElement("div");
+  episodesList.className = "episode-list";
+
+  detailsEl.appendChild(summaryLine);
+  detailsEl.appendChild(genresLine);
+  detailsEl.appendChild(statusLine);
+  detailsEl.appendChild(episodesLine);
+  detailsEl.appendChild(nextLine);
+  detailsEl.appendChild(episodesList);
+
   try {
     const [showInfo, episodes] = await Promise.all([
       fetchShow(show.id),
       fetchEpisodes(show.id)
     ]);
 
-    detailsEl.innerHTML = "";
-
-    const summaryLine = document.createElement("div");
-    summaryLine.className = "show-details-line";
     const rawSummary =
       (showInfo && typeof showInfo.summary === "string"
         ? showInfo.summary
         : show.summary) || "";
-    const cleanSummary = rawSummary.replace(/<[^>]+>/g, "").trim();
-    summaryLine.textContent =
+    const cleanSummary = cleanText(rawSummary);
+    summaryValue.textContent =
       cleanSummary.length > 0 ? cleanSummary : "No summary available.";
 
-    const genresLine = document.createElement("div");
-    genresLine.className = "show-details-line";
     const genresSource =
       showInfo && Array.isArray(showInfo.genres) && showInfo.genres.length
         ? showInfo.genres
         : Array.isArray(show.genres)
         ? show.genres
         : [];
-    const genresText =
+    genresValue.textContent =
       genresSource && genresSource.length ? genresSource.join(", ") : "Unknown genre";
-    genresLine.innerHTML =
-      '<span class="show-details-label">Genres</span>' + genresText;
 
-    const statusLine = document.createElement("div");
-    statusLine.className = "show-details-line";
-    statusLine.innerHTML =
-      '<span class="show-details-label">Status</span>' +
-      (showInfo?.status || show.status || "Unknown");
+    statusValue.textContent = showInfo?.status || show.status || "Unknown";
 
-    const episodesLine = document.createElement("div");
-    episodesLine.className = "show-details-line";
     if (episodes.length) {
       const seasonsSet = new Set();
       episodes.forEach((ep) => {
@@ -262,18 +491,13 @@ async function populateShowDetails(detailsEl, show) {
           seasonsSet.add(ep.season);
         }
       });
-      episodesLine.innerHTML =
-        '<span class="show-details-label">Episodes</span>' +
-        `${episodes.length} in ${seasonsSet.size} season${
-          seasonsSet.size === 1 ? "" : "s"
-        }`;
+      episodesLineValue.textContent = `${episodes.length} in ${seasonsSet.size} season${
+        seasonsSet.size === 1 ? "" : "s"
+      }`;
     } else {
-      episodesLine.innerHTML =
-        '<span class="show-details-label">Episodes</span>Unknown';
+      episodesLineValue.textContent = "Unknown";
     }
 
-    const nextLine = document.createElement("div");
-    nextLine.className = "show-details-line";
     if (show.nextEpisode?.airstamp) {
       const dt = new Date(show.nextEpisode.airstamp);
       const when = dt.toLocaleString(undefined, {
@@ -288,14 +512,52 @@ async function populateShowDetails(detailsEl, show) {
         '<span class="show-details-label">Next</span>No upcoming episode';
     }
 
-    detailsEl.appendChild(summaryLine);
-    detailsEl.appendChild(genresLine);
-    detailsEl.appendChild(statusLine);
-    detailsEl.appendChild(episodesLine);
-    detailsEl.appendChild(nextLine);
+    episodesList.innerHTML = "";
+    const sortedEpisodes = [...episodes].sort((a, b) => {
+      const ta = Date.parse(a.airstamp || a.airdate || 0);
+      const tb = Date.parse(b.airstamp || b.airdate || 0);
+      return tb - ta;
+    });
+    const episodesToShow = sortedEpisodes.slice(0, 5);
+    if (episodesToShow.length) {
+      episodesToShow.forEach((ep) => {
+        const row = document.createElement("div");
+        row.className = "episode-row";
+        const code =
+          typeof ep.season === "number" && typeof ep.number === "number"
+            ? `S${ep.season}E${ep.number}`
+            : "";
+        const airDate = ep.airdate
+          ? ep.airdate
+          : ep.airstamp
+          ? new Date(ep.airstamp).toLocaleDateString()
+          : "";
+        const rowTop = document.createElement("div");
+        rowTop.className = "episode-meta";
+        rowTop.textContent = [code, ep.name, airDate].filter(Boolean).join(" • ");
+        const rowSummary = cleanText(ep.summary);
+        if (rowSummary) {
+          const summaryEl = document.createElement("div");
+          summaryEl.className = "episode-summary";
+          summaryEl.textContent =
+            rowSummary.length > 140 ? `${rowSummary.slice(0, 137)}...` : rowSummary;
+          row.appendChild(summaryEl);
+        }
+        row.prepend(rowTop);
+        episodesList.appendChild(row);
+      });
+    } else {
+      const noEpisodes = document.createElement("span");
+      noEpisodes.textContent = "No episode list available.";
+      episodesList.appendChild(noEpisodes);
+    }
   } catch (err) {
     console.error("Failed to load show details", err);
-    detailsEl.textContent = "Unable to load details.";
+    episodesLineValue.textContent = "Unable to load episodes.";
+    episodesList.innerHTML = "";
+    const errorMsg = document.createElement("span");
+    errorMsg.textContent = "Unable to load details right now.";
+    episodesList.appendChild(errorMsg);
   }
 }
 
@@ -366,10 +628,10 @@ function updateTimerElement(timerEl, info) {
     grid.className = "countdown-grid";
 
     const units = [
-      { key: "days", label: "D" },
-      { key: "hours", label: "H" },
-      { key: "minutes", label: "M" },
-      { key: "seconds", label: "S" }
+      { key: "days", label: "Days" },
+      { key: "hours", label: "Hours" },
+      { key: "minutes", label: "Min" },
+      { key: "seconds", label: "Sec" }
     ];
 
     units.forEach((u) => {
@@ -488,7 +750,7 @@ async function runSearch(inputEl, resultsEl) {
 }
 
 async function addShowFromSearch(showSummary) {
-  const stored = await chrome.storage.local.get("shows");
+  const stored = await chrome.storage.sync.get("shows");
   const shows = Array.isArray(stored.shows) ? stored.shows : [];
   if (shows.some((s) => s.id === showSummary.id)) {
     const container = document.getElementById("shows-container");
@@ -544,7 +806,7 @@ async function addShowFromSearch(showSummary) {
   };
 
   const updated = [...shows, newShow];
-  await chrome.storage.local.set({ shows: updated });
+  await chrome.storage.sync.set({ shows: updated });
 
   const container = document.getElementById("shows-container");
   if (container) {
@@ -553,10 +815,10 @@ async function addShowFromSearch(showSummary) {
 }
 
 async function onRemoveShow(showId) {
-  const stored = await chrome.storage.local.get("shows");
+  const stored = await chrome.storage.sync.get("shows");
   const shows = Array.isArray(stored.shows) ? stored.shows : [];
   const updated = shows.filter((s) => s.id !== showId);
-  await chrome.storage.local.set({ shows: updated });
+  await chrome.storage.sync.set({ shows: updated });
 
   const container = document.getElementById("shows-container");
   if (container) {
