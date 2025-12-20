@@ -89,6 +89,23 @@
         <span id="toast-message"></span>
       </div>
 
+      <!-- Custom Link Modal -->
+      <div id="link-modal" class="login-modal" style="display: none;">
+        <div class="link-modal-content">
+          <h3>🔗 Add Watch Link</h3>
+          <p class="link-modal-show-name" id="link-modal-show-name">Show Name</p>
+          <div class="link-input-wrapper">
+            <input type="url" id="link-input" placeholder="https://netflix.com/title/..." />
+          </div>
+          <p style="font-size: 11px; opacity: 0.6; margin: 0;">Paste a link to where you watch this show</p>
+          <div class="link-modal-buttons">
+            <button id="link-save-btn" class="link-save-btn">Save Link</button>
+            <button id="link-remove-btn" class="link-remove-btn">Remove</button>
+            <button id="link-cancel-btn" class="login-btn-cancel">Cancel</button>
+          </div>
+        </div>
+      </div>
+
       <main class="popup-main">
         <section id="search-section" class="search-panel">
           <div class="search-shell">
@@ -127,10 +144,17 @@
           
           <div class="shows-header">
             <span class="section-title">Your shows</span>
-            <select id="sort-select" class="sort-select">
-              <option value="soonest">Soonest first</option>
-              <option value="alpha">A–Z</option>
-            </select>
+            <div class="filters-row">
+              <select id="status-filter" class="status-filter">
+                <option value="all">All</option>
+                <option value="Running">Running</option>
+                <option value="Ended">Ended</option>
+              </select>
+              <select id="sort-select" class="sort-select">
+                <option value="soonest">Soonest first</option>
+                <option value="alpha">A–Z</option>
+              </select>
+            </div>
           </div>
           <div id="shows-container" class="shows-list"></div>
         </section>
