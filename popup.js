@@ -146,10 +146,44 @@ async function exportShows() {
       return;
     }
 
+    // Export all show data including:
+    // - Basic info (id, name, image, genres, status, summary, contentType)
+    // - Episode data (nextEpisode, allEpisodesLastFetchedAt)
+    // - User data (watchLink, priority, watchedEpisode, lastWatchedAt, watched, watchedAt)
+    // - Any other custom properties
     const exportData = {
-      version: "1.0",
+      version: "1.1",
       exportedAt: new Date().toISOString(),
-      shows: shows
+      exportedBy: currentUser ? currentUser.name : "Unknown",
+      showCount: shows.length,
+      shows: shows.map(show => ({
+        // Core show data
+        id: show.id,
+        name: show.name,
+        image: show.image,
+        genres: show.genres,
+        status: show.status,
+        summary: show.summary,
+        contentType: show.contentType || "tv",
+        premiered: show.premiered,
+        
+        // Episode and countdown data
+        nextEpisode: show.nextEpisode,
+        allEpisodesLastFetchedAt: show.allEpisodesLastFetchedAt,
+        
+        // User customizations
+        watchLink: show.watchLink || null,
+        priority: show.priority || false,
+        watchedEpisode: show.watchedEpisode || 0,
+        lastWatchedAt: show.lastWatchedAt || null,
+        watched: show.watched || false,
+        watchedAt: show.watchedAt || null,
+        
+        // Additional metadata (preserve any other properties)
+        malId: show.malId,
+        imdbId: show.imdbId,
+        tvmazeId: show.tvmazeId
+      }))
     };
 
     const dataStr = JSON.stringify(exportData, null, 2);
@@ -165,7 +199,7 @@ async function exportShows() {
     URL.revokeObjectURL(url);
 
     hideProfileMenu();
-    showToast(`Exported ${shows.length} show(s) successfully!`);
+    showToast(`Exported ${shows.length} show(s) with all data successfully!`);
   } catch (err) {
     console.error("Export error:", err);
     showToast("Failed to export shows. Please try again.", "error");
@@ -752,17 +786,17 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Load saved view preference
   chrome.storage.sync.get(["sortMode", "currentView"], (res) => {
-    if (res.sortMode) {
-      currentSortMode = res.sortMode;
+      if (res.sortMode) {
+        currentSortMode = res.sortMode;
       if (sortSelect) sortSelect.value = currentSortMode;
-    }
+      }
     if (res.currentView) {
       currentView = res.currentView;
       switchView(currentView, false);
     } else {
       loadAndRenderShows(showsContainer);
     }
-  });
+    });
 
   if (sortSelect) {
     sortSelect.addEventListener("change", async (e) => {
@@ -770,7 +804,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       currentPage = 1; // Reset pagination when sort changes
       await chrome.storage.sync.set({ sortMode: currentSortMode });
       if (currentView === "my-shows") {
-        loadAndRenderShows(showsContainer);
+      loadAndRenderShows(showsContainer);
       }
     });
   }
@@ -870,6 +904,27 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  // Infinite scroll: detect when user scrolls to bottom (for my-shows view)
+  let scrollTimeout = null;
+  const handleMyShowsScroll = () => {
+    if (scrollTimeout) {
+      clearTimeout(scrollTimeout);
+    }
+    scrollTimeout = setTimeout(() => {
+      handleMyShowsInfiniteScroll();
+    }, 150);
+  };
+
+  // Listen to scroll on body (Chrome extension popups scroll on body)
+  document.body.addEventListener("scroll", handleMyShowsScroll, { passive: true });
+  
+  // Also listen on window as fallback
+  window.addEventListener("scroll", handleMyShowsScroll, { passive: true });
+
+  // Also use Intersection Observer for more reliable detection
+  // This watches for when we're near the bottom of the container
+  setupInfiniteScrollObserver();
+
 });
 
 async function switchView(view, savePreference = true) {
@@ -963,25 +1018,29 @@ async function switchView(view, savePreference = true) {
 
 // Setup infinite scroll listener for the shows container
 function setupInfiniteScroll(container) {
-  // Remove existing listener if any
-  container.removeEventListener("scroll", handleInfiniteScroll);
+  // Remove existing listener from body if any
+  document.body.removeEventListener("scroll", handleInfiniteScroll);
 
   // Only add listener for airing/popular views
   if (currentView === "airing" || currentView === "popular") {
-    container.addEventListener("scroll", handleInfiniteScroll);
+    // Listen on body since that's what scrolls in the popup
+    document.body.addEventListener("scroll", handleInfiniteScroll);
   }
 }
 
 // Handle scroll event for infinite loading
 async function handleInfiniteScroll(e) {
-  const container = e.target;
+  const scrollElement = document.body;
 
-  // Check if we're near the bottom (within 200px)
-  const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 200;
+  // Check if we're near the bottom (within 300px)
+  const nearBottom = scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight < 300;
 
   if (!nearBottom || isLoadingMore) return;
 
-  if (currentView === "popular" && hasMorePopular) {
+  const container = document.getElementById("shows-container");
+  if (!container) return;
+
+  if (currentView === "popular" && hasMorePopular && currentContentType === "tv") {
     await loadMorePopularShows(container);
   } else if (currentView === "airing" && hasMoreAiring) {
     await loadMoreAiringShows(container);
@@ -1024,7 +1083,7 @@ async function loadAndRenderAiringShows(container) {
       // Use Jikan to get airing anime, then cross-match with TVmaze
       const jikanAnime = await fetchAiringAnime();
 
-      // Cross-match each anime with TVmaze - only keep if found in TVmaze
+      // Cross-match each anime with TVmaze - filter to only actual anime
       const matchedAnime = await Promise.all(
         jikanAnime.map(async (anime) => {
           // Try searching TVmaze by title (try English name first, then original)
@@ -1035,62 +1094,89 @@ async function loadAndRenderAiringShows(container) {
             tvmazeShow = await searchByTitle(anime.name);
           }
 
-          // Only return if found in TVmaze
+          // If found in TVmaze, verify it's actually anime
           if (tvmazeShow) {
-            // Prioritize images: TVmaze first, then Jikan, ensure it's a valid URL
-            let finalImage = null;
-            // Handle TVmaze image format (could be string or object with medium/original)
-            if (tvmazeShow.image) {
-              if (typeof tvmazeShow.image === 'string' && tvmazeShow.image.trim()) {
-                finalImage = tvmazeShow.image;
-              } else if (typeof tvmazeShow.image === 'object') {
-                finalImage = tvmazeShow.image.medium || tvmazeShow.image.original || null;
+            // Check if TVmaze show is anime (has Animation genre)
+            const tvmazeGenres = Array.isArray(tvmazeShow.genres) ? tvmazeShow.genres : [];
+            const isAnimeGenre = tvmazeGenres.some(g =>
+              g.toLowerCase() === "animation" ||
+              g.toLowerCase() === "anime"
+            );
+
+            // Check if name matches closely
+            const nameMatches = tvmazeShow.name.toLowerCase().includes(anime.name.toLowerCase().split(' ')[0]) ||
+              anime.name.toLowerCase().includes(tvmazeShow.name.toLowerCase().split(' ')[0]);
+
+            // Only use TVmaze data if it's actually anime or name matches well
+            if (isAnimeGenre || nameMatches) {
+              // Prioritize images: TVmaze first, then Jikan
+              let finalImage = null;
+              if (tvmazeShow.image) {
+                if (typeof tvmazeShow.image === 'string' && tvmazeShow.image.trim()) {
+                  finalImage = tvmazeShow.image;
+                } else if (typeof tvmazeShow.image === 'object') {
+                  finalImage = tvmazeShow.image.medium || tvmazeShow.image.original || null;
+                }
+              }
+              if (!finalImage && anime.image) {
+                finalImage = anime.image;
+              }
+
+              try {
+                const episodes = await fetchEpisodes(tvmazeShow.id);
+                const nextEpisode = computeNextEpisode(episodes);
+                return {
+                  id: tvmazeShow.id,
+                  name: anime.name, // Use Jikan name (more accurate for anime)
+                  genres: anime.genres.length ? anime.genres : tvmazeShow.genres,
+                  status: tvmazeShow.status || anime.status,
+                  summary: anime.summary || tvmazeShow.summary,
+                  image: finalImage || anime.image,
+                  nextEpisode,
+                  watched: false,
+                  watchedAt: null,
+                  contentType: "anime",
+                  malId: anime.malId
+                };
+              } catch (err) {
+                console.error(`Failed to fetch episodes for ${anime.name}:`, err);
+                // Return with Jikan data on error
+                return {
+                  id: tvmazeShow.id,
+                  name: anime.name,
+                  genres: anime.genres,
+                  status: anime.status,
+                  summary: anime.summary,
+                  image: finalImage || anime.image,
+                  nextEpisode: null,
+                  watched: false,
+                  watchedAt: null,
+                  contentType: "anime",
+                  malId: anime.malId
+                };
               }
             }
-            // Fallback to Jikan image if TVmaze doesn't have one
-            if (!finalImage && anime.image && typeof anime.image === 'string' && anime.image.trim()) {
-              finalImage = anime.image;
-            }
-
-            try {
-              const episodes = await fetchEpisodes(tvmazeShow.id);
-              const nextEpisode = computeNextEpisode(episodes);
-              return {
-                id: tvmazeShow.id,
-                name: tvmazeShow.name,
-                genres: tvmazeShow.genres || anime.genres,
-                status: tvmazeShow.status || anime.status,
-                summary: tvmazeShow.summary || anime.summary,
-                image: finalImage,
-                nextEpisode,
-                watched: false,
-                watchedAt: null,
-                contentType: "anime",
-                malId: anime.malId
-              };
-            } catch (err) {
-              console.error(`Failed to fetch episodes for ${tvmazeShow.name}:`, err);
-              return {
-                id: tvmazeShow.id,
-                name: tvmazeShow.name,
-                genres: tvmazeShow.genres || anime.genres,
-                status: tvmazeShow.status || anime.status,
-                summary: tvmazeShow.summary || anime.summary,
-                image: finalImage,
-                nextEpisode: null,
-                watched: false,
-                watchedAt: null,
-                contentType: "anime",
-                malId: anime.malId
-              };
-            }
           }
-          return null; // Not found in TVmaze, skip
+
+          // If not found in TVmaze or not anime, still show with Jikan data
+          return {
+            id: `jikan-${anime.malId}`,
+            name: anime.name,
+            genres: anime.genres,
+            status: anime.status,
+            summary: anime.summary,
+            image: anime.image,
+            nextEpisode: null, // No TVmaze episode data
+            watched: false,
+            watchedAt: null,
+            contentType: "anime",
+            malId: anime.malId
+          };
         })
       );
 
-      // Filter out nulls (anime not found in TVmaze)
-      shows = matchedAnime.filter(show => show !== null);
+      // All anime from Jikan should be shown (no nulls)
+      shows = matchedAnime;
     } else if (currentContentType === "movies") {
       // Movies don't have "airing" episodes, but show them with "Not episodic" label
       // Try to get some popular movies from Wikidata
@@ -1124,7 +1210,7 @@ async function loadAndRenderAiringShows(container) {
       );
     }
 
-    if (!shows.length) {
+  if (!shows.length) {
       container.innerHTML = `<div class='card show-card'>No ${currentContentType === "tv" ? "TV shows" : "anime"} airing today.</div>`;
       return;
     }
@@ -1183,7 +1269,7 @@ async function loadAndRenderPopularShows(container) {
           jikanAnime = await fetchPopularAnime();
         }
 
-        // Cross-match each anime with TVmaze - only keep if found in TVmaze
+        // Cross-match each anime with TVmaze - only keep if found in TVmaze AND is actually anime
         const matchedAnime = await Promise.all(
           jikanAnime.map(async (anime) => {
             // Try searching TVmaze by title (try English name first, then original)
@@ -1194,8 +1280,24 @@ async function loadAndRenderPopularShows(container) {
               tvmazeShow = await searchByTitle(anime.name);
             }
 
-            // Only return if found in TVmaze
+            // Only return if found in TVmaze AND is actually anime
             if (tvmazeShow) {
+              // Check if TVmaze show is anime (has Animation genre or matches closely)
+              const tvmazeGenres = Array.isArray(tvmazeShow.genres) ? tvmazeShow.genres : [];
+              const isAnimeGenre = tvmazeGenres.some(g =>
+                g.toLowerCase() === "animation" ||
+                g.toLowerCase() === "anime"
+              );
+
+              // Also check if the name matches closely (to avoid wrong matches)
+              const nameMatches = tvmazeShow.name.toLowerCase().includes(anime.name.toLowerCase().split(' ')[0]) ||
+                anime.name.toLowerCase().includes(tvmazeShow.name.toLowerCase().split(' ')[0]);
+
+              // Only include if it's an animation genre or name matches very closely
+              if (!isAnimeGenre && !nameMatches) {
+                return null; // Skip non-anime shows
+              }
+
               // Prioritize images: TVmaze first, then Jikan, ensure it's a valid URL
               let finalImage = null;
               if (tvmazeShow.image && typeof tvmazeShow.image === 'string' && tvmazeShow.image.trim()) {
@@ -1209,11 +1311,11 @@ async function loadAndRenderPopularShows(container) {
                 const nextEpisode = computeNextEpisode(episodes);
                 return {
                   id: tvmazeShow.id,
-                  name: tvmazeShow.name,
-                  genres: tvmazeShow.genres || anime.genres,
+                  name: anime.name, // Use the Jikan name (more accurate for anime)
+                  genres: anime.genres.length ? anime.genres : tvmazeShow.genres,
                   status: tvmazeShow.status || anime.status,
-                  summary: tvmazeShow.summary || anime.summary,
-                  image: finalImage,
+                  summary: anime.summary || tvmazeShow.summary,
+                  image: finalImage || anime.image,
                   nextEpisode,
                   watched: false,
                   watchedAt: null,
@@ -1224,11 +1326,11 @@ async function loadAndRenderPopularShows(container) {
                 console.error(`Failed to fetch episodes for ${tvmazeShow.name}:`, err);
                 return {
                   id: tvmazeShow.id,
-                  name: tvmazeShow.name,
-                  genres: tvmazeShow.genres || anime.genres,
+                  name: anime.name,
+                  genres: anime.genres.length ? anime.genres : tvmazeShow.genres,
                   status: tvmazeShow.status || anime.status,
-                  summary: tvmazeShow.summary || anime.summary,
-                  image: finalImage,
+                  summary: anime.summary || tvmazeShow.summary,
+                  image: finalImage || anime.image,
                   nextEpisode: null,
                   watched: false,
                   watchedAt: null,
@@ -1237,11 +1339,25 @@ async function loadAndRenderPopularShows(container) {
                 };
               }
             }
-            return null; // Not found in TVmaze, skip
+
+            // If not found in TVmaze, still show but use Jikan data only
+            return {
+              id: `jikan-${anime.malId}`,
+              name: anime.name,
+              genres: anime.genres,
+              status: anime.status,
+              summary: anime.summary,
+              image: anime.image,
+              nextEpisode: null, // No TVmaze data for episodes
+              watched: false,
+              watchedAt: null,
+              contentType: "anime",
+              malId: anime.malId
+            };
           })
         );
 
-        // Filter out nulls (anime not found in TVmaze)
+        // Filter out nulls (non-anime TVmaze matches)
         shows = matchedAnime.filter(show => show !== null);
       } else if (currentContentType === "movies") {
         // For movies, fetch from a common genre like "Drama" or "Action"
@@ -1621,15 +1737,19 @@ async function loadAndRenderShows(container) {
 }
 
 function renderShows(container, shows, options = { interactive: true, clickable: false }) {
-  // Remove only the Load More button if it exists, keep cards for pagination
+  // Remove only the Load More button and loading indicator if they exist
   const existingLoadMoreBtn = container.querySelector(".load-more-btn");
   if (existingLoadMoreBtn) {
     existingLoadMoreBtn.remove();
   }
+  const existingLoading = container.querySelector(".loading-more");
+  if (existingLoading) {
+    existingLoading.remove();
+  }
 
   // If this is a fresh render (page 1), clear everything
   if (currentPage === 1) {
-    container.innerHTML = "";
+  container.innerHTML = "";
   }
 
   if (!shows.length) {
@@ -1653,19 +1773,52 @@ function renderShows(container, shows, options = { interactive: true, clickable:
     container.appendChild(card);
   }
 
-  // Add "Load More" button if there are more shows
+  // Ensure sentinel is at the bottom for intersection observer
+  let sentinel = container.querySelector(".infinite-scroll-sentinel");
+  if (sentinel) {
+    sentinel.remove(); // Remove old sentinel
+  }
   if (hasMore && currentView === "my-shows") {
+    sentinel = document.createElement("div");
+    sentinel.className = "infinite-scroll-sentinel";
+    sentinel.style.height = "1px";
+    sentinel.style.width = "100%";
+    sentinel.style.opacity = "0";
+    sentinel.style.pointerEvents = "none";
+    container.appendChild(sentinel);
+  }
+
+  // Show loading indicator if currently loading more
+  if (isLoadingMore && currentView === "my-shows") {
+    const loadingIndicator = document.createElement("div");
+    loadingIndicator.className = "loading-more";
+    loadingIndicator.textContent = "Loading more...";
+    container.appendChild(loadingIndicator);
+  }
+  // Only show "Load More" button as fallback if not using infinite scroll
+  // (We'll keep it hidden but it can serve as a backup)
+  else if (hasMore && currentView === "my-shows") {
+    // For infinite scroll, we don't show the button, but we'll trigger on scroll
+    // The button is kept as a fallback but hidden
     const loadMoreBtn = document.createElement("button");
     loadMoreBtn.className = "load-more-btn";
+    loadMoreBtn.style.display = "none"; // Hidden, infinite scroll handles it
     loadMoreBtn.textContent = `Load More (${ordered.length - endIndex} remaining)`;
     loadMoreBtn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      currentPage++;
-      // Re-render with new page (will append new cards)
-      renderShows(container, shows, options);
+      loadNextPage(container, shows, options);
     });
     container.appendChild(loadMoreBtn);
+  }
+
+  isLoadingMore = false; // Reset loading flag after render
+  
+  // Setup intersection observer after render (for my-shows view)
+  if (currentView === "my-shows" && hasMore) {
+    setTimeout(() => {
+      setupInfiniteScrollObserver();
+    }, 100);
   }
 
   startCountdownLoop();
@@ -1831,15 +1984,15 @@ function createShowCard(show, interactive, clickable = false) {
   } else {
     const countdownInfo = getCountdownInfo(show.nextEpisode?.airstamp);
     meta.textContent = countdownInfo.label;
-    if (show.nextEpisode?.airstamp) {
-      timer.dataset.airstamp = show.nextEpisode.airstamp;
+  if (show.nextEpisode?.airstamp) {
+    timer.dataset.airstamp = show.nextEpisode.airstamp;
 
       // Add "countdown-soon" class if airing within 24 hours
       if (countdownInfo.mode === "upcoming" && countdownInfo.days === 0) {
         timer.classList.add("countdown-soon");
       }
-    }
-    updateTimerElement(timer, countdownInfo);
+  }
+  updateTimerElement(timer, countdownInfo);
   }
 
   content.appendChild(header);
@@ -2017,14 +2170,14 @@ async function populateShowDetails(detailsEl, show) {
     }
     episodesList.innerHTML = '<div style="opacity:0.5; font-size:11px; text-align:center">Episode list not available</div>';
     return;
-  }
+    }
 
   // Next Episode for TV (Stored data first)
-  if (show.nextEpisode?.airstamp) {
-    const dt = new Date(show.nextEpisode.airstamp);
+    if (show.nextEpisode?.airstamp) {
+      const dt = new Date(show.nextEpisode.airstamp);
     const when = dt.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
     nextEpEl.innerHTML = `<div class="detail-label">Next Episode</div><div class="detail-value">S${show.nextEpisode.season}E${show.nextEpisode.number} • ${when}</div>`;
-  } else {
+    } else {
     nextEpEl.innerHTML = `<div class="detail-label">Next Episode</div><div class="detail-value">No upcoming episode information</div>`;
   }
 
@@ -2065,14 +2218,14 @@ async function populateShowDetails(detailsEl, show) {
     const episodes = fetchedEpisodes && fetchedEpisodes.length ? fetchedEpisodes : [];
 
     if (episodes.length) {
-      episodesList.innerHTML = "";
-      const sortedEpisodes = [...episodes].sort((a, b) => {
-        const ta = Date.parse(a.airstamp || a.airdate || 0);
-        const tb = Date.parse(b.airstamp || b.airdate || 0);
-        return tb - ta;
-      });
+    episodesList.innerHTML = "";
+    const sortedEpisodes = [...episodes].sort((a, b) => {
+      const ta = Date.parse(a.airstamp || a.airdate || 0);
+      const tb = Date.parse(b.airstamp || b.airdate || 0);
+      return tb - ta;
+    });
 
-      const episodesToShow = sortedEpisodes.slice(0, 5);
+    const episodesToShow = sortedEpisodes.slice(0, 5);
       episodesToShow.forEach((ep) => {
         const row = document.createElement("div");
         row.className = "episode-row";
@@ -2117,14 +2270,14 @@ function sortShows(shows, mode) {
     if (!a.priority && b.priority) return 1;
 
     // Then apply the selected sort mode
-    if (mode === "alpha") {
+  if (mode === "alpha") {
       return a.name.localeCompare(b.name);
-    } else {
-      // default: soonest next episode first
+  } else {
+    // default: soonest next episode first
       const ta = a.nextEpisode?.airstamp ? Date.parse(a.nextEpisode.airstamp) : Infinity;
       const tb = b.nextEpisode?.airstamp ? Date.parse(b.nextEpisode.airstamp) : Infinity;
       return ta - tb;
-    }
+  }
   });
 
   return copy;
@@ -2260,37 +2413,37 @@ async function searchByGenre(genre, inputEl, resultsEl) {
 }
 
 function createSearchResultItem(show, index, inputEl, resultsEl) {
-  const item = document.createElement("button");
-  item.type = "button";
-  item.className = "search-result-item anim-in";
-  item.style.animationDelay = `${index * 30}ms`;
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "search-result-item anim-in";
+      item.style.animationDelay = `${index * 30}ms`;
 
-  const main = document.createElement("div");
-  main.className = "search-result-main";
+      const main = document.createElement("div");
+      main.className = "search-result-main";
 
-  if (show.image) {
-    const art = document.createElement("img");
-    art.className = "search-result-art";
-    art.src = show.image;
-    art.alt = `${show.name} poster`;
-    main.appendChild(art);
-  }
+      if (show.image) {
+        const art = document.createElement("img");
+        art.className = "search-result-art";
+        art.src = show.image;
+        art.alt = `${show.name} poster`;
+        main.appendChild(art);
+      }
 
-  const textWrap = document.createElement("div");
+      const textWrap = document.createElement("div");
 
-  const title = document.createElement("span");
-  title.className = "search-result-title";
-  title.textContent = show.name;
-  textWrap.appendChild(title);
+      const title = document.createElement("span");
+      title.className = "search-result-title";
+      title.textContent = show.name;
+      textWrap.appendChild(title);
 
-  if (show.premiered || show.status) {
-    const meta = document.createElement("span");
-    meta.className = "search-result-meta";
-    const year = show.premiered ? show.premiered.slice(0, 4) : "";
-    const status = show.status || "";
-    meta.textContent = [year, status].filter(Boolean).join(" • ");
-    textWrap.appendChild(meta);
-  }
+      if (show.premiered || show.status) {
+        const meta = document.createElement("span");
+        meta.className = "search-result-meta";
+        const year = show.premiered ? show.premiered.slice(0, 4) : "";
+        const status = show.status || "";
+        meta.textContent = [year, status].filter(Boolean).join(" • ");
+        textWrap.appendChild(meta);
+      }
 
   // Add clickable genres
   if (show.genres && show.genres.length > 0) {
@@ -2308,20 +2461,20 @@ function createSearchResultItem(show, index, inputEl, resultsEl) {
       genresContainer.appendChild(genreTag);
     });
     textWrap.appendChild(genresContainer);
-  }
+      }
 
-  main.appendChild(textWrap);
+      main.appendChild(textWrap);
 
-  const right = document.createElement("span");
-  right.className = "search-result-year";
-  right.textContent = "Add";
+      const right = document.createElement("span");
+      right.className = "search-result-year";
+      right.textContent = "Add";
 
-  item.appendChild(main);
-  item.appendChild(right);
+      item.appendChild(main);
+      item.appendChild(right);
 
-  item.addEventListener("click", () => {
-    addShowFromSearch(show);
-  });
+      item.addEventListener("click", () => {
+        addShowFromSearch(show);
+      });
 
   return item;
 }
@@ -2384,11 +2537,11 @@ async function addShowFromSearch(showSummary) {
       // Convert ID to string for comparison (TVmaze returns numeric IDs)
       const showIdStr = String(showSummary.id);
       if (showSummary.id && !showIdStr.startsWith("wd-") && !showIdStr.startsWith("jikan-")) {
-        const [info, episodes] = await Promise.all([
-          fetchShow(showSummary.id),
-          fetchEpisodes(showSummary.id)
-        ]);
-        showInfo = info;
+    const [info, episodes] = await Promise.all([
+      fetchShow(showSummary.id),
+      fetchEpisodes(showSummary.id)
+    ]);
+    showInfo = info;
         // Only update nextEpisode if we got a valid result, otherwise keep the one from showSummary
         const computedNextEpisode = computeNextEpisode(episodes);
         if (computedNextEpisode) {
@@ -2398,7 +2551,7 @@ async function addShowFromSearch(showSummary) {
 
         if (showInfo) {
           genres = Array.isArray(showInfo.genres) && showInfo.genres.length
-            ? showInfo.genres
+    ? showInfo.genres
             : genres;
           status = showInfo.status || status;
           summary = typeof showInfo.summary === "string"
@@ -2435,7 +2588,7 @@ async function addShowFromSearch(showSummary) {
             : genres;
           status = showInfo.status || status;
           summary = typeof showInfo.summary === "string"
-            ? showInfo.summary.replace(/<[^>]+>/g, "")
+      ? showInfo.summary.replace(/<[^>]+>/g, "")
             : summary;
           const imageFromInfo = showInfo.image && (showInfo.image.medium || showInfo.image.original);
           image = imageFromInfo || image;
@@ -2477,8 +2630,8 @@ async function addShowFromSearch(showSummary) {
   if (currentView !== "my-shows") {
     switchView("my-shows");
   } else {
-    const container = document.getElementById("shows-container");
-    if (container) {
+  const container = document.getElementById("shows-container");
+  if (container) {
       loadAndRenderShows(container);
     }
   }
@@ -2494,4 +2647,126 @@ async function onRemoveShow(showId) {
   if (container) {
     renderShows(container, updated, { interactive: true });
   }
+}
+
+// Infinite scroll handler for my-shows view
+async function handleMyShowsInfiniteScroll() {
+  // Only work in "my-shows" view
+  if (currentView !== "my-shows") {
+    return;
+  }
+
+  // Don't trigger if already loading
+  if (isLoadingMore) {
+    return;
+  }
+
+  const container = document.getElementById("shows-container");
+  if (!container) return;
+
+  // Get all shows to check if there's more
+  const stored = await chrome.storage.sync.get("shows");
+  const shows = Array.isArray(stored.shows) ? stored.shows : [];
+  
+  if (!shows.length) return;
+
+  const ordered = sortShows(shows, currentSortMode);
+  const totalShown = currentPage * ITEMS_PER_PAGE;
+  const hasMore = ordered.length > totalShown;
+
+  if (!hasMore) return;
+
+  // Check if we're near the bottom using multiple methods
+  // Method 1: Check body scroll (Chrome extension popups)
+  const body = document.body;
+  const bodyScrollTop = body.scrollTop || 0;
+  const bodyScrollHeight = body.scrollHeight || 0;
+  const bodyClientHeight = body.clientHeight || window.innerHeight;
+  const bodyDistanceFromBottom = bodyScrollHeight - (bodyScrollTop + bodyClientHeight);
+
+  // Method 2: Check window scroll
+  const windowScrollTop = window.pageYOffset || document.documentElement.scrollTop || 0;
+  const windowScrollHeight = document.documentElement.scrollHeight || bodyScrollHeight;
+  const windowClientHeight = window.innerHeight || document.documentElement.clientHeight;
+  const windowDistanceFromBottom = windowScrollHeight - (windowScrollTop + windowClientHeight);
+
+  // Use the smaller distance (whichever is closer to bottom)
+  const distanceFromBottom = Math.min(bodyDistanceFromBottom, windowDistanceFromBottom);
+
+  // If we're within 300px of the bottom, load more
+  if (distanceFromBottom < 300) {
+    loadNextPage(container, shows, { interactive: true });
+  }
+}
+
+// Load next page function
+async function loadNextPage(container, shows, options) {
+  if (isLoadingMore) return; // Prevent duplicate loads
+
+  isLoadingMore = true;
+  currentPage++;
+  
+  // Re-render with new page (will append new cards)
+  renderShows(container, shows, options);
+  
+  // Re-setup observer after new content is added
+  setTimeout(() => {
+    setupInfiniteScrollObserver();
+  }, 100);
+}
+
+// Setup Intersection Observer for infinite scroll
+function setupInfiniteScrollObserver() {
+  // Only work in my-shows view
+  if (currentView !== "my-shows") {
+    return;
+  }
+
+  const container = document.getElementById("shows-container");
+  if (!container) return;
+
+  // Remove existing observer if any
+  if (window.infiniteScrollObserver) {
+    window.infiniteScrollObserver.disconnect();
+  }
+
+  // Create a sentinel element at the bottom to detect when it's visible
+  let sentinel = container.querySelector(".infinite-scroll-sentinel");
+  if (!sentinel) {
+    sentinel = document.createElement("div");
+    sentinel.className = "infinite-scroll-sentinel";
+    sentinel.style.height = "1px";
+    sentinel.style.width = "100%";
+    sentinel.style.opacity = "0";
+    sentinel.style.pointerEvents = "none";
+    container.appendChild(sentinel);
+  }
+
+  // Create observer
+  window.infiniteScrollObserver = new IntersectionObserver(
+    async (entries) => {
+      const entry = entries[0];
+      if (entry.isIntersecting && !isLoadingMore && currentView === "my-shows") {
+        const stored = await chrome.storage.sync.get("shows");
+        const shows = Array.isArray(stored.shows) ? stored.shows : [];
+        
+        if (!shows.length) return;
+
+        const ordered = sortShows(shows, currentSortMode);
+        const totalShown = currentPage * ITEMS_PER_PAGE;
+        const hasMore = ordered.length > totalShown;
+
+        if (hasMore) {
+          loadNextPage(container, shows, { interactive: true });
+        }
+      }
+    },
+    {
+      root: null, // Use viewport
+      rootMargin: "300px", // Trigger 300px before reaching the sentinel
+      threshold: 0.1
+    }
+  );
+
+  window.infiniteScrollObserver.observe(sentinel);
 }
