@@ -1233,6 +1233,47 @@ body {
   box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.5);
 }
 
+/* New episode indicator - bright green pulsing */
+.show-play-btn.new-episode {
+  background: linear-gradient(135deg, #10b981, #059669);
+  animation: newEpisodePulse 1.5s ease-in-out infinite;
+}
+
+@keyframes newEpisodePulse {
+
+  0%,
+  100% {
+    box-shadow: 0 4px 8px rgba(16, 185, 129, 0.3);
+  }
+
+  50% {
+    box-shadow: 0 4px 16px rgba(16, 185, 129, 0.6);
+  }
+}
+
+/* Edit link button (pencil icon) */
+.show-edit-link-btn {
+  border: none;
+  background: rgba(148, 163, 184, 0.2);
+  color: rgba(148, 163, 184, 0.9);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  transition: all 0.15s ease-out;
+  line-height: 1;
+}
+
+.show-edit-link-btn:hover {
+  background: rgba(148, 163, 184, 0.3);
+  color: #e5e7eb;
+}
+
+.show-edit-link-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.4);
+}
+
 /* Link Modal */
 .link-modal-content {
   background: radial-gradient(circle at top left, #0f172a, #020617);

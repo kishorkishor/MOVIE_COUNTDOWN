@@ -451,6 +451,36 @@ function openWatchLink(url) {
   }
 }
 
+async function openWatchLinkAndTrack(showId, url) {
+  if (!url || !isValidUrl(url)) {
+    showToast("Invalid or missing watch link", "error");
+    return;
+  }
+
+  // Open the link
+  window.open(url, "_blank");
+
+  // Update lastWatchedAt timestamp
+  try {
+    const stored = await chrome.storage.sync.get("shows");
+    const shows = Array.isArray(stored.shows) ? stored.shows : [];
+
+    const showIndex = shows.findIndex(s => s.id === showId);
+    if (showIndex !== -1) {
+      shows[showIndex].lastWatchedAt = new Date().toISOString();
+      await chrome.storage.sync.set({ shows });
+
+      // Refresh the UI to update button state
+      const container = document.getElementById("shows-container");
+      if (container && currentView === "my-shows") {
+        loadAndRenderShows(container);
+      }
+    }
+  } catch (err) {
+    console.error("Error updating lastWatchedAt:", err);
+  }
+}
+
 function showLogoutModal() {
   const modal = document.getElementById("logout-modal");
   if (modal) {
@@ -1534,26 +1564,29 @@ function createShowCard(show, interactive, clickable = false) {
 
     // Watch link button - show + or Play based on whether link exists
     if (show.watchLink) {
+      // Check if new episode has aired since last watched
+      const hasNewEpisode = show.lastWatchedAt && show.nextEpisode?.airstamp &&
+        new Date(show.nextEpisode.airstamp) < new Date() &&
+        new Date(show.nextEpisode.airstamp) > new Date(show.lastWatchedAt);
+
       // Play button (has link)
       const playBtn = document.createElement("button");
       playBtn.type = "button";
-      playBtn.className = "show-play-btn";
-      playBtn.title = "Watch now";
-      playBtn.innerHTML = "▶ Watch";
+      playBtn.className = "show-play-btn" + (hasNewEpisode ? " new-episode" : "");
+      playBtn.title = hasNewEpisode ? "New episode available!" : "Watch now";
+      playBtn.innerHTML = hasNewEpisode ? "▶ NEW!" : "▶ Watch";
       playBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        openWatchLink(show.watchLink);
+        openWatchLinkAndTrack(show.id, show.watchLink);
       });
       actionsContainer.appendChild(playBtn);
 
-      // Small edit button
+      // Small edit button (icon only)
       const editBtn = document.createElement("button");
       editBtn.type = "button";
-      editBtn.className = "show-add-link-btn";
+      editBtn.className = "show-edit-link-btn";
       editBtn.title = "Edit watch link";
       editBtn.textContent = "✎";
-      editBtn.style.fontSize = "12px";
-      editBtn.style.padding = "4px 6px";
       editBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         showLinkModal(show.id, show.name, show.watchLink);
