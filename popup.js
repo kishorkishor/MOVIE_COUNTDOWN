@@ -1752,6 +1752,11 @@ function toggleShowDetails(card, show) {
   details.textContent = "Loading details…";
   card.appendChild(details);
 
+  // Scroll the expanded card into view smoothly
+  setTimeout(() => {
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+  }, 100);
+
   populateShowDetails(details, show);
 }
 
@@ -1762,7 +1767,7 @@ async function populateShowDetails(detailsEl, show) {
   };
 
   const fallbackSummary = cleanText(show.summary || "");
-  const fallbackGenres = Array.isArray(show.genres) ? fallbackGenres.join(", ") : "-";
+  const fallbackGenres = Array.isArray(show.genres) ? show.genres.join(", ") : "-";
   const fallbackStatus = show.status || "Unknown";
 
   // Build a details shell immediately
@@ -2241,13 +2246,19 @@ async function addShowFromSearch(showSummary) {
       }
 
       // Then get TVmaze data for episodes and countdown
-      if (showSummary.id && !showSummary.id.startsWith("wd-") && !showSummary.id.startsWith("jikan-")) {
+      // Convert ID to string for comparison (TVmaze returns numeric IDs)
+      const showIdStr = String(showSummary.id);
+      if (showSummary.id && !showIdStr.startsWith("wd-") && !showIdStr.startsWith("jikan-")) {
         const [info, episodes] = await Promise.all([
           fetchShow(showSummary.id),
           fetchEpisodes(showSummary.id)
         ]);
         showInfo = info;
-        nextEpisode = computeNextEpisode(episodes);
+        // Only update nextEpisode if we got a valid result, otherwise keep the one from showSummary
+        const computedNextEpisode = computeNextEpisode(episodes);
+        if (computedNextEpisode) {
+          nextEpisode = computedNextEpisode;
+        }
         fetchedAt = new Date().toISOString();
 
         if (showInfo) {
@@ -2264,26 +2275,38 @@ async function addShowFromSearch(showSummary) {
       } else {
         fetchedAt = new Date().toISOString();
       }
-    } else if (contentType === "tv" && !showSummary.id.startsWith("wd-")) {
-      // Fetch TV show details from TVmaze
-      const [info, episodes] = await Promise.all([
-        fetchShow(showSummary.id),
-        fetchEpisodes(showSummary.id)
-      ]);
-      showInfo = info;
-      nextEpisode = computeNextEpisode(episodes);
-      fetchedAt = new Date().toISOString();
+    } else if (contentType === "tv") {
+      // Convert ID to string for comparison (TVmaze returns numeric IDs)
+      const showIdStr = String(showSummary.id);
+      if (!showIdStr.startsWith("wd-")) {
+        // Fetch TV show details from TVmaze
+        const [info, episodes] = await Promise.all([
+          fetchShow(showSummary.id),
+          fetchEpisodes(showSummary.id)
+        ]);
+        showInfo = info;
+        console.log(`[addShowFromSearch] Fetched ${episodes.length} episodes for "${showSummary.name}"`);
+        // Only update nextEpisode if we got a valid result, otherwise keep the one from showSummary
+        const computedNextEpisode = computeNextEpisode(episodes);
+        console.log(`[addShowFromSearch] Computed nextEpisode:`, computedNextEpisode);
+        if (computedNextEpisode) {
+          nextEpisode = computedNextEpisode;
+        }
+        fetchedAt = new Date().toISOString();
 
-      if (showInfo) {
-        genres = Array.isArray(showInfo.genres) && showInfo.genres.length
-          ? showInfo.genres
-          : genres;
-        status = showInfo.status || status;
-        summary = typeof showInfo.summary === "string"
-          ? showInfo.summary.replace(/<[^>]+>/g, "")
-          : summary;
-        const imageFromInfo = showInfo.image && (showInfo.image.medium || showInfo.image.original);
-        image = imageFromInfo || image;
+        if (showInfo) {
+          genres = Array.isArray(showInfo.genres) && showInfo.genres.length
+            ? showInfo.genres
+            : genres;
+          status = showInfo.status || status;
+          summary = typeof showInfo.summary === "string"
+            ? showInfo.summary.replace(/<[^>]+>/g, "")
+            : summary;
+          const imageFromInfo = showInfo.image && (showInfo.image.medium || showInfo.image.original);
+          image = imageFromInfo || image;
+        }
+      } else {
+        fetchedAt = new Date().toISOString();
       }
     } else if (contentType === "movies") {
       // Movies don't have episodes, just use the summary data
@@ -2307,16 +2330,21 @@ async function addShowFromSearch(showSummary) {
     contentType: contentType
   };
 
+  console.log(`[addShowFromSearch] Final newShow object:`, newShow);
+
   const updated = [...shows, newShow];
   await chrome.storage.sync.set({ shows: updated });
 
   showToast(`Added ${newShow.name} to your shows!`);
 
-  // If we're in my-shows view, refresh it
-  if (currentView === "my-shows") {
+  // Always switch to my-shows view and refresh to show the newly added show with countdown
+  currentPage = 1; // Reset pagination
+  if (currentView !== "my-shows") {
+    switchView("my-shows");
+  } else {
     const container = document.getElementById("shows-container");
     if (container) {
-      renderShows(container, updated, { interactive: true });
+      loadAndRenderShows(container);
     }
   }
 }
