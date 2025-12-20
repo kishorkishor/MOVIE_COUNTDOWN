@@ -481,6 +481,63 @@ async function openWatchLinkAndTrack(showId, url) {
   }
 }
 
+async function updateWatchedProgress(showId, delta) {
+  try {
+    const stored = await chrome.storage.sync.get("shows");
+    const shows = Array.isArray(stored.shows) ? stored.shows : [];
+
+    const showIndex = shows.findIndex(s => s.id === showId);
+    if (showIndex !== -1) {
+      let current = shows[showIndex].watchedEpisode || 0;
+      current += delta;
+      if (current < 0) current = 0;
+
+      shows[showIndex].watchedEpisode = current;
+      await chrome.storage.sync.set({ shows });
+
+      // Update UI if details are open
+      // Re-rendering the whole show details might be heavy, but it ensures consistency
+      // Ideally we just update the text content, but we need to find the element
+      const container = document.getElementById("shows-container");
+      if (container) {
+        // Find the card for this show
+        // Simpler approach: Just reload the list to refresh everything including progress
+        // Or finding the specific span:
+        const showCards = container.querySelectorAll(".show-card");
+        // We could iterate but reloading might be safer to prevent desync
+        // loadAndRenderShows(container); // This closes the details though!
+
+        // Let's just update the specific text element if found
+        // This requires traversing the DOM or storing references.
+        // For now, let's just reload the list which will unfortunately close details.
+        // BETTER: Update the show object in memory and re-populate the details?
+        // Let's look up the opened details
+
+        // Hack: Reloading closes details, which is annoying.
+        // Let's try to find the open card and update text.
+        // Since we are inside the click handler context in populateShowDetails, 
+        // we can't easily reach back.
+        // BUT, populateShowDetails re-runs every time we open.
+        // If we want instant feedback without closing:
+
+        // For now, let's just reload to be safe, even if it closes.
+        // Or if we want to be fancy, we can find the span in the active details.
+
+        const openCard = Array.from(showCards).find(c => c.querySelector(".show-details"));
+        if (openCard) {
+          const details = openCard.querySelector(".show-details");
+          const progressText = details.querySelector(".progress-text");
+          if (progressText) {
+            progressText.textContent = `Ep ${current}`;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Error updating progress:", err);
+  }
+}
+
 function showLogoutModal() {
   const modal = document.getElementById("logout-modal");
   if (modal) {
@@ -1521,13 +1578,8 @@ function createShowCard(show, interactive, clickable = false) {
   title.className = "show-title";
   title.textContent = show.name;
 
-  // Add content type badge
+  // Content type is now shown in details, not as a badge
   const contentType = show.contentType || "tv";
-  const typeBadge = document.createElement("span");
-  typeBadge.className = "content-type-badge";
-  typeBadge.textContent = contentType === "anime" ? "🎌" : contentType === "movies" ? "🎬" : "📺";
-  typeBadge.title = contentType === "anime" ? "Anime" : contentType === "movies" ? "Movie" : "TV Show";
-  title.appendChild(typeBadge);
 
   const sub = document.createElement("div");
   sub.className = "show-countdown";
@@ -1542,6 +1594,14 @@ function createShowCard(show, interactive, clickable = false) {
   textWrap.appendChild(sub);
 
   main.appendChild(textWrap);
+
+  // Chevron expand icon
+  if (interactive || clickable) {
+    const chevron = document.createElement("div");
+    chevron.className = "show-chevron";
+    chevron.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+    header.appendChild(chevron);
+  }
 
   header.appendChild(main);
 
@@ -1681,8 +1741,11 @@ function toggleShowDetails(card, show) {
   const existing = card.querySelector(".show-details");
   if (existing) {
     existing.remove();
+    card.classList.remove("expanded");
     return;
   }
+
+  card.classList.add("expanded");
 
   const details = document.createElement("div");
   details.className = "show-details";
@@ -1699,165 +1762,208 @@ async function populateShowDetails(detailsEl, show) {
   };
 
   const fallbackSummary = cleanText(show.summary || "");
-  const fallbackGenres = Array.isArray(show.genres) ? show.genres : [];
+  const fallbackGenres = Array.isArray(show.genres) ? fallbackGenres.join(", ") : "-";
   const fallbackStatus = show.status || "Unknown";
 
-  // Build a details shell immediately so something shows even if network fails.
+  // Build a details shell immediately
   detailsEl.innerHTML = "";
 
-  const summaryLine = document.createElement("div");
-  summaryLine.className = "show-details-line";
-  const summaryLabel = document.createElement("span");
-  summaryLabel.className = "show-details-label";
-  summaryLabel.textContent = "Summary";
-  const summaryValue = document.createElement("span");
-  summaryValue.textContent =
-    fallbackSummary.length > 0 ? fallbackSummary : "No summary available.";
-  summaryLine.appendChild(summaryLabel);
-  summaryLine.appendChild(summaryValue);
+  // Helper to create a detail item
+  const createDetail = (label, value, fullWidth = false) => {
+    const item = document.createElement("div");
+    item.className = "detail-item" + (fullWidth ? " detail-full-width" : "");
+    item.innerHTML = `<div class="detail-label">${label}</div><div class="detail-value">${value}</div>`;
+    return item;
+  };
 
-  const genresLine = document.createElement("div");
-  genresLine.className = "show-details-line";
-  const genresLabel = document.createElement("span");
-  genresLabel.className = "show-details-label";
-  genresLabel.textContent = "Genres";
-  const genresValue = document.createElement("span");
-  genresValue.textContent =
-    fallbackGenres.length > 0 ? fallbackGenres.join(", ") : "Unknown genre";
-  genresLine.appendChild(genresLabel);
-  genresLine.appendChild(genresValue);
+  // 1. Grid Container
+  const grid = document.createElement("div");
+  grid.className = "details-grid";
 
-  const statusLine = document.createElement("div");
-  statusLine.className = "show-details-line";
-  const statusLabel = document.createElement("span");
-  statusLabel.className = "show-details-label";
-  statusLabel.textContent = "Status";
-  const statusValue = document.createElement("span");
-  statusValue.textContent = fallbackStatus;
-  statusLine.appendChild(statusLabel);
-  statusLine.appendChild(statusValue);
+  // Type
+  const contentType = show.contentType || "tv";
+  const typeText = contentType === "anime" ? "Anime" : contentType === "movies" ? "Movie" : "TV Show";
+  grid.appendChild(createDetail("Type", typeText));
 
-  const episodesLine = document.createElement("div");
-  episodesLine.className = "show-details-line";
-  const episodesLineLabel = document.createElement("span");
-  episodesLineLabel.className = "show-details-label";
-  episodesLineLabel.textContent = "Episodes";
-  const episodesLineValue = document.createElement("span");
-  episodesLineValue.textContent = "Loading…";
-  episodesLine.appendChild(episodesLineLabel);
-  episodesLine.appendChild(episodesLineValue);
+  // Status (placeholder)
+  const statusItem = createDetail("Status", show.status || "Unknown"); // Will update later
+  grid.appendChild(statusItem);
 
-  const nextLine = document.createElement("div");
-  nextLine.className = "show-details-line";
+  // Premiered (placeholder)
+  const premieredItem = createDetail("Premiered", show.premiered || "Unknown");
+  grid.appendChild(premieredItem);
 
+  // Genres (placeholder)
+  const genresItem = createDetail("Genres", fallbackGenres);
+  grid.appendChild(genresItem);
+
+  detailsEl.appendChild(grid);
+
+  // Episode Progress UI
+  const progressLine = document.createElement("div");
+  progressLine.className = "show-details-line";
+  progressLine.style.alignItems = "center"; // Align label with buttons
+
+  const progressLabel = document.createElement("span");
+  progressLabel.className = "show-details-label";
+  progressLabel.textContent = "My Progress";
+
+  const progressContainer = document.createElement("div");
+  progressContainer.className = "episode-progress";
+
+  const currentEp = show.watchedEpisode || 0;
+
+  const minusBtn = document.createElement("button");
+  minusBtn.className = "progress-btn";
+  minusBtn.textContent = "−"; // minus sign
+  minusBtn.title = "Decrement episode";
+  minusBtn.onclick = (e) => {
+    e.stopPropagation();
+    updateWatchedProgress(show.id, -1);
+  };
+
+  const plusBtn = document.createElement("button");
+  plusBtn.className = "progress-btn";
+  plusBtn.textContent = "+";
+  plusBtn.title = "Increment episode";
+  plusBtn.onclick = (e) => {
+    e.stopPropagation();
+    updateWatchedProgress(show.id, 1);
+  };
+
+  const progressText = document.createElement("span");
+  progressText.className = "progress-text";
+  progressText.textContent = `Ep ${currentEp}`;
+  progressText.style.minWidth = "40px";
+  progressText.style.textAlign = "center";
+
+  progressContainer.appendChild(minusBtn);
+  progressContainer.appendChild(progressText);
+  progressContainer.appendChild(plusBtn);
+
+  progressLine.appendChild(progressLabel);
+  progressLine.appendChild(progressContainer);
+
+  detailsEl.appendChild(progressLine);
+
+  // 2. Next Episode Highlight (Full Width)
+  const nextEpEl = document.createElement("div");
+  nextEpEl.className = "detail-item detail-highlight"; // Reusing item structure but with highlight class
+  // Will populate logic below
+  detailsEl.appendChild(nextEpEl);
+
+  // 3. Summary
+  const summaryEl = document.createElement("div");
+  summaryEl.className = "summary-text";
+  summaryEl.textContent = fallbackSummary.length > 0 ? (fallbackSummary.length > 200 ? fallbackSummary.slice(0, 197) + "..." : fallbackSummary) : "No summary available.";
+  detailsEl.appendChild(summaryEl);
+
+  // 4. Episode List
   const episodesList = document.createElement("div");
   episodesList.className = "episode-list";
-
-  detailsEl.appendChild(summaryLine);
-  detailsEl.appendChild(genresLine);
-  detailsEl.appendChild(statusLine);
-  detailsEl.appendChild(episodesLine);
-  detailsEl.appendChild(nextLine);
   detailsEl.appendChild(episodesList);
 
-  try {
-    const [showInfo, episodes] = await Promise.all([
-      fetchShow(show.id),
-      fetchEpisodes(show.id)
-    ]);
+  // Check Types and Populate
+  const isAnime = show.contentType === "anime" || String(show.id).startsWith("jikan-");
+  const isMovie = show.contentType === "movies";
 
-    const rawSummary =
-      (showInfo && typeof showInfo.summary === "string"
-        ? showInfo.summary
-        : show.summary) || "";
-    const cleanSummary = cleanText(rawSummary);
-    summaryValue.textContent =
-      cleanSummary.length > 0 ? cleanSummary : "No summary available.";
-
-    const genresSource =
-      showInfo && Array.isArray(showInfo.genres) && showInfo.genres.length
-        ? showInfo.genres
-        : Array.isArray(show.genres)
-          ? show.genres
-          : [];
-    genresValue.textContent =
-      genresSource && genresSource.length ? genresSource.join(", ") : "Unknown genre";
-
-    statusValue.textContent = showInfo?.status || show.status || "Unknown";
-
-    if (episodes.length) {
-      const seasonsSet = new Set();
-      episodes.forEach((ep) => {
-        if (typeof ep.season === "number") {
-          seasonsSet.add(ep.season);
-        }
-      });
-      episodesLineValue.textContent = `${episodes.length} in ${seasonsSet.size} season${seasonsSet.size === 1 ? "" : "s"
-        }`;
-    } else {
-      episodesLineValue.textContent = "Unknown";
-    }
-
+  if (isAnime || isMovie) {
     if (show.nextEpisode?.airstamp) {
       const dt = new Date(show.nextEpisode.airstamp);
-      const when = dt.toLocaleString(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short"
-      });
-      nextLine.innerHTML =
-        '<span class="show-details-label">Next</span>' +
-        `S${show.nextEpisode.season}E${show.nextEpisode.number} \u2022 ${when}`;
+      const when = dt.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+      nextEpEl.innerHTML = `<div class="detail-label">Next</div><div class="detail-value">S${show.nextEpisode.season}E${show.nextEpisode.number} • ${when}</div>`;
     } else {
-      nextLine.innerHTML =
-        '<span class="show-details-label">Next</span>No upcoming episode';
+      nextEpEl.innerHTML = `<div class="detail-label">Next</div><div class="detail-value">${isAnime ? "Check schedule" : "N/A for movies"}</div>`;
+    }
+    episodesList.innerHTML = '<div style="opacity:0.5; font-size:11px; text-align:center">Episode list not available</div>';
+    return;
+  }
+
+  // Next Episode for TV (Stored data first)
+  if (show.nextEpisode?.airstamp) {
+    const dt = new Date(show.nextEpisode.airstamp);
+    const when = dt.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    nextEpEl.innerHTML = `<div class="detail-label">Next Episode</div><div class="detail-value">S${show.nextEpisode.season}E${show.nextEpisode.number} • ${when}</div>`;
+  } else {
+    nextEpEl.innerHTML = `<div class="detail-label">Next Episode</div><div class="detail-value">No upcoming episode information</div>`;
+  }
+
+  // Async Fetch for TV Shows
+  try {
+    const [fetchedShow, fetchedEpisodes] = await Promise.all([
+      fetchShow(show.id).catch(() => null),
+      fetchEpisodes(show.id).catch(() => [])
+    ]);
+
+    if (fetchedShow) {
+      // Update Grid Items
+      statusItem.querySelector(".detail-value").textContent = fetchedShow.status || show.status || "Unknown";
+      if (fetchedShow.premiered) premieredItem.querySelector(".detail-value").textContent = fetchedShow.premiered;
+      if (fetchedShow.genres?.length) genresItem.querySelector(".detail-value").textContent = fetchedShow.genres.join(", ");
+
+      // Update Summary
+      const rawSum = fetchedShow.summary || show.summary || "";
+      const cleanSum = cleanText(rawSum);
+      if (cleanSum) summaryEl.textContent = cleanSum;
     }
 
-    episodesList.innerHTML = "";
-    const sortedEpisodes = [...episodes].sort((a, b) => {
-      const ta = Date.parse(a.airstamp || a.airdate || 0);
-      const tb = Date.parse(b.airstamp || b.airdate || 0);
-      return tb - ta;
+    if (fetchedEpisodes && fetchedEpisodes.length) {
+      // ... existing episode list logic ...
+      // We can reuse the existing logic but need to append to episodesList
+    } else {
+      episodesList.innerHTML = '<div style="opacity:0.5; font-size:11px; text-align:center">No episodes found</div>';
+    }
+
+    // START REUSING EXISTING EPISODE RENDER LOGIC
+    const seasonsSet = new Set();
+    fetchedEpisodes.forEach((ep) => {
+      if (typeof ep.season === "number") seasonsSet.add(ep.season);
     });
-    const episodesToShow = sortedEpisodes.slice(0, 5);
-    if (episodesToShow.length) {
+    // Update grid genres or status if we want, but better to keep it clean.
+
+    // Render Episodes List
+    const episodes = fetchedEpisodes && fetchedEpisodes.length ? fetchedEpisodes : [];
+
+    if (episodes.length) {
+      episodesList.innerHTML = "";
+      const sortedEpisodes = [...episodes].sort((a, b) => {
+        const ta = Date.parse(a.airstamp || a.airdate || 0);
+        const tb = Date.parse(b.airstamp || b.airdate || 0);
+        return tb - ta;
+      });
+
+      const episodesToShow = sortedEpisodes.slice(0, 5);
       episodesToShow.forEach((ep) => {
         const row = document.createElement("div");
         row.className = "episode-row";
-        const code =
-          typeof ep.season === "number" && typeof ep.number === "number"
-            ? `S${ep.season}E${ep.number}`
-            : "";
+        const code = (typeof ep.season === "number" && typeof ep.number === "number") ? `S${ep.season}E${ep.number}` : "";
+
         const airDate = ep.airdate
           ? ep.airdate
-          : ep.airstamp
-            ? new Date(ep.airstamp).toLocaleDateString()
-            : "";
+          : (ep.airstamp ? new Date(ep.airstamp).toLocaleDateString() : "");
+
         const rowTop = document.createElement("div");
         rowTop.className = "episode-meta";
         rowTop.textContent = [code, ep.name, airDate].filter(Boolean).join(" • ");
-        const rowSummary = cleanText(ep.summary);
+
+        const rowSummary = cleanText(ep.summary || "");
         if (rowSummary) {
           const summaryEl = document.createElement("div");
           summaryEl.className = "episode-summary";
-          summaryEl.textContent =
-            rowSummary.length > 140 ? `${rowSummary.slice(0, 137)}...` : rowSummary;
+          summaryEl.textContent = rowSummary.length > 140 ? `${rowSummary.slice(0, 137)}...` : rowSummary;
           row.appendChild(summaryEl);
         }
+
         row.prepend(rowTop);
         episodesList.appendChild(row);
       });
     } else {
-      const noEpisodes = document.createElement("span");
-      noEpisodes.textContent = "No episode list available.";
-      episodesList.appendChild(noEpisodes);
+      episodesList.innerHTML = '<div style="opacity:0.5; font-size:11px; text-align:center">No episodes found</div>';
     }
+
   } catch (err) {
     console.error("Failed to load show details", err);
-    episodesLineValue.textContent = "Unable to load episodes.";
-    episodesList.innerHTML = "";
-    const errorMsg = document.createElement("span");
-    errorMsg.textContent = "Unable to load details right now.";
-    episodesList.appendChild(errorMsg);
+    episodesList.innerHTML = '<div style="opacity:0.5; font-size:11px; text-align:center">Unable to load details</div>';
   }
 }
 
