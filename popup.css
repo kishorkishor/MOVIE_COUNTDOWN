@@ -1636,3 +1636,49 @@ body::-webkit-scrollbar-thumb:hover {
   align-items: center;
   gap: 8px;
 }
+
+/* Loading More Indicator for Infinite Scroll */
+.loading-more {
+  text-align: center;
+  padding: 16px;
+  font-size: 13px;
+  color: rgba(148, 163, 184, 0.8);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Load More Button (fallback for my-shows pagination) */
+.load-more-btn {
+  width: 100%;
+  padding: 12px;
+  margin-top: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(108, 140, 255, 0.3);
+  background: rgba(15, 23, 42, 0.8);
+  color: rgba(191, 219, 254, 0.95);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease-out;
+}
+
+.load-more-btn:hover {
+  background: rgba(108, 140, 255, 0.2);
+  border-color: rgba(108, 140, 255, 0.5);
+  transform: translateY(-1px);
+}
+
+.load-more-btn:active {
+  transform: translateY(0);
+}

@@ -378,6 +378,7 @@ export async function fetchScheduleToday(genreFilter = null) {
 }
 
 // Fetch popular shows (shows with high ratings that are currently running)
+// This version fetches multiple pages at once - use for initial load
 export async function fetchPopularShows() {
   try {
     // Fetch multiple pages of shows and filter by rating
@@ -429,6 +430,103 @@ export async function fetchPopularShows() {
     return popularShows;
   } catch (err) {
     console.error("Error fetching popular shows:", err);
+    return [];
+  }
+}
+
+// Fetch a single page of shows for infinite scroll
+// Returns { shows: [], hasMore: boolean }
+export async function fetchShowsPage(page = 0, genreFilter = null) {
+  try {
+    const res = await fetch(`${TVMAZE_BASE_URL}/shows?page=${page}`);
+
+    if (!res.ok) {
+      if (res.status === 404) return { shows: [], hasMore: false };
+      console.error("TVmaze shows page failed", res.status);
+      return { shows: [], hasMore: false };
+    }
+
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) {
+      return { shows: [], hasMore: false };
+    }
+
+    // Filter shows
+    let filtered = data.filter(show => {
+      const hasRating = show.rating && show.rating.average && show.rating.average >= 6.5;
+      const isRunning = show.status === "Running";
+
+      // Genre filter if specified
+      if (genreFilter) {
+        const genres = Array.isArray(show.genres) ? show.genres : [];
+        const genreLower = genreFilter.toLowerCase();
+        const matchesGenre = genres.some(g => g.toLowerCase() === genreLower);
+        return hasRating && matchesGenre;
+      }
+
+      return hasRating && isRunning;
+    });
+
+    // Sort by rating
+    filtered.sort((a, b) => (b.rating?.average || 0) - (a.rating?.average || 0));
+
+    // Map to simpler format
+    const shows = filtered.map(show => ({
+      id: show.id,
+      name: show.name,
+      genres: Array.isArray(show.genres) ? show.genres : [],
+      premiered: show.premiered || null,
+      status: show.status || null,
+      summary: show.summary ? show.summary.replace(/<[^>]+>/g, "") : "",
+      image: (show.image && (show.image.medium || show.image.original)) || null,
+      rating: show.rating?.average || null
+    }));
+
+    return { shows, hasMore: data.length >= 250 }; // TVmaze returns up to 250 per page
+  } catch (err) {
+    console.error("Error fetching shows page:", err);
+    return { shows: [], hasMore: false };
+  }
+}
+
+// Fetch schedule for a specific date (for airing shows pagination)
+export async function fetchScheduleByDate(date = null, country = "US") {
+  try {
+    const dateStr = date || (() => {
+      const today = new Date();
+      return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    })();
+
+    const res = await fetch(`${TVMAZE_BASE_URL}/schedule?country=${country}&date=${dateStr}`);
+
+    if (!res.ok) {
+      console.error("TVmaze schedule failed", res.status);
+      return [];
+    }
+
+    const data = await res.json();
+    const showMap = new Map();
+
+    data.forEach((scheduleItem) => {
+      if (scheduleItem.show && !showMap.has(scheduleItem.show.id)) {
+        const show = scheduleItem.show;
+        showMap.set(show.id, {
+          id: show.id,
+          name: show.name,
+          genres: Array.isArray(show.genres) ? show.genres : [],
+          premiered: show.premiered || null,
+          status: show.status || null,
+          summary: show.summary ? show.summary.replace(/<[^>]+>/g, "") : "",
+          image: (show.image && (show.image.medium || show.image.original)) || null,
+          rating: show.rating?.average || null,
+          airtime: scheduleItem.airtime || null
+        });
+      }
+    });
+
+    return Array.from(showMap.values());
+  } catch (err) {
+    console.error("Error fetching schedule:", err);
     return [];
   }
 }

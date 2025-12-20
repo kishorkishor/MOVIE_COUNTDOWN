@@ -8,6 +8,7 @@ import {
   isFetchStale,
   fetchScheduleToday,
   fetchPopularShows,
+  fetchShowsPage,
   lookupByImdb,
   searchByTitle
 } from "./tvmazeApi.js";
@@ -56,6 +57,15 @@ let currentStatusFilter = "all"; // "all", "Running", "Ended"
 let currentPage = 1;
 const ITEMS_PER_PAGE = 15;
 let pendingLinkShowId = null; // Show ID for link modal
+
+// Infinite Scroll State
+let airingPage = 0; // Current page for airing shows (TVmaze uses 0-indexed)
+let popularPage = 0; // Current page for popular shows
+let isLoadingMore = false; // Prevent multiple simultaneous loads
+let hasMoreAiring = true; // Whether there are more airing shows to load
+let hasMorePopular = true; // Whether there are more popular shows to load
+let cachedAiringShows = []; // Cached airing shows for the current content type
+let cachedPopularShows = []; // Cached popular shows for the current content type
 
 // Simple login functions - no OAuth2 required!
 async function getCurrentUser() {
@@ -865,6 +875,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 async function switchView(view, savePreference = true) {
   currentView = view;
   currentPage = 1; // Reset pagination when switching views
+
+  // Reset infinite scroll state
+  popularPage = 0;
+  airingPage = 0;
+  hasMorePopular = true;
+  hasMoreAiring = true;
+  cachedPopularShows = [];
+  cachedAiringShows = [];
+  isLoadingMore = false;
+
   const showsContainer = document.getElementById("shows-container");
   const sectionTitle = document.querySelector(".section-title");
   const sortSelect = document.getElementById("sort-select");
@@ -923,6 +943,9 @@ async function switchView(view, savePreference = true) {
     }
   }
 
+  // Setup infinite scroll for airing/popular views
+  setupInfiniteScroll(showsContainer);
+
   // Load appropriate content
   if (view === "my-shows") {
     loadAndRenderShows(showsContainer);
@@ -935,6 +958,33 @@ async function switchView(view, savePreference = true) {
   // Save preference
   if (savePreference) {
     await chrome.storage.sync.set({ currentView: view });
+  }
+}
+
+// Setup infinite scroll listener for the shows container
+function setupInfiniteScroll(container) {
+  // Remove existing listener if any
+  container.removeEventListener("scroll", handleInfiniteScroll);
+
+  // Only add listener for airing/popular views
+  if (currentView === "airing" || currentView === "popular") {
+    container.addEventListener("scroll", handleInfiniteScroll);
+  }
+}
+
+// Handle scroll event for infinite loading
+async function handleInfiniteScroll(e) {
+  const container = e.target;
+
+  // Check if we're near the bottom (within 200px)
+  const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 200;
+
+  if (!nearBottom || isLoadingMore) return;
+
+  if (currentView === "popular" && hasMorePopular) {
+    await loadMorePopularShows(container);
+  } else if (currentView === "airing" && hasMoreAiring) {
+    await loadMoreAiringShows(container);
   }
 }
 
@@ -1233,11 +1283,96 @@ async function loadAndRenderPopularShows(container) {
       return;
     }
 
+    // Cache the shows for infinite scroll
+    cachedPopularShows = shows;
+
     renderShows(container, shows, { interactive: false, clickable: true });
   } catch (err) {
     console.error("Failed to load popular shows:", err);
     container.innerHTML = "<div class='card show-card'>Failed to load popular shows.</div>";
   }
+}
+
+// Load more popular shows for infinite scroll (TV only)
+async function loadMorePopularShows(container) {
+  if (isLoadingMore || !hasMorePopular || currentContentType !== "tv") return;
+
+  isLoadingMore = true;
+
+  // Add loading indicator
+  const loadingEl = document.createElement("div");
+  loadingEl.className = "loading-more";
+  loadingEl.textContent = "Loading more...";
+  container.appendChild(loadingEl);
+
+  try {
+    popularPage++;
+    const { shows: newShows, hasMore } = await fetchShowsPage(popularPage, currentGenreFilter);
+
+    hasMorePopular = hasMore && newShows.length > 0;
+
+    // Remove loading indicator
+    loadingEl.remove();
+
+    if (newShows.length === 0) {
+      isLoadingMore = false;
+      return;
+    }
+
+    // Process shows with episode data
+    const processedShows = await Promise.all(
+      newShows.map(async (show) => {
+        try {
+          const episodes = await fetchEpisodes(show.id);
+          const nextEpisode = computeNextEpisode(episodes);
+          return {
+            ...show,
+            nextEpisode,
+            watched: false,
+            watchedAt: null,
+            contentType: "tv"
+          };
+        } catch (err) {
+          return {
+            ...show,
+            nextEpisode: null,
+            watched: false,
+            watchedAt: null,
+            contentType: "tv"
+          };
+        }
+      })
+    );
+
+    // Filter out duplicates
+    const existingIds = new Set(cachedPopularShows.map(s => s.id));
+    const uniqueShows = processedShows.filter(s => !existingIds.has(s.id));
+
+    // Add to cache
+    cachedPopularShows.push(...uniqueShows);
+
+    // Append new cards to container
+    uniqueShows.forEach(show => {
+      const card = createShowCard(show, false, true);
+      container.appendChild(card);
+      attachDetailsToggle(card, show);
+    });
+
+    startCountdownLoop();
+  } catch (err) {
+    console.error("Failed to load more popular shows:", err);
+    loadingEl.remove();
+    hasMorePopular = false;
+  }
+
+  isLoadingMore = false;
+}
+
+// Load more airing shows (placeholder - airing doesn't really paginate by day)
+async function loadMoreAiringShows(container) {
+  // Airing shows are already all loaded for the current day
+  // For infinite scroll, we could load shows from different countries
+  hasMoreAiring = false;
 }
 
 async function loadAndRenderByGenre(genre, contentType) {
