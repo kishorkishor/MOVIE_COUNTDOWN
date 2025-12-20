@@ -670,6 +670,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (sortSelect) {
     sortSelect.addEventListener("change", async (e) => {
       currentSortMode = e.target.value;
+      currentPage = 1; // Reset pagination when sort changes
       await chrome.storage.sync.set({ sortMode: currentSortMode });
       if (currentView === "my-shows") {
         loadAndRenderShows(showsContainer);
@@ -776,6 +777,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 async function switchView(view, savePreference = true) {
   currentView = view;
+  currentPage = 1; // Reset pagination when switching views
   const showsContainer = document.getElementById("shows-container");
   const sectionTitle = document.querySelector(".section-title");
   const sortSelect = document.getElementById("sort-select");
@@ -1397,7 +1399,17 @@ async function loadAndRenderShows(container) {
 }
 
 function renderShows(container, shows, options = { interactive: true, clickable: false }) {
-  container.innerHTML = "";
+  // Remove only the Load More button if it exists, keep cards for pagination
+  const existingLoadMoreBtn = container.querySelector(".load-more-btn");
+  if (existingLoadMoreBtn) {
+    existingLoadMoreBtn.remove();
+  }
+
+  // If this is a fresh render (page 1), clear everything
+  if (currentPage === 1) {
+    container.innerHTML = "";
+  }
+
   if (!shows.length) {
     const empty = document.createElement("div");
     empty.className = "card show-card";
@@ -1408,8 +1420,8 @@ function renderShows(container, shows, options = { interactive: true, clickable:
 
   const ordered = currentView === "my-shows" ? sortShows(shows, currentSortMode) : shows;
 
-  // Pagination: show only items for current page
-  const startIndex = 0;
+  // Pagination: calculate which items to show
+  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const endIndex = currentPage * ITEMS_PER_PAGE;
   const paginatedShows = ordered.slice(startIndex, endIndex);
   const hasMore = ordered.length > endIndex;
@@ -1424,9 +1436,12 @@ function renderShows(container, shows, options = { interactive: true, clickable:
     const loadMoreBtn = document.createElement("button");
     loadMoreBtn.className = "load-more-btn";
     loadMoreBtn.textContent = `Load More (${ordered.length - endIndex} remaining)`;
-    loadMoreBtn.addEventListener("click", () => {
+    loadMoreBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
       currentPage++;
-      loadAndRenderShows(container);
+      // Re-render with new page (will append new cards)
+      renderShows(container, shows, options);
     });
     container.appendChild(loadMoreBtn);
   }
